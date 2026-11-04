@@ -25,9 +25,9 @@
 
 Proyek ini merupakan pengembangan prototipe sistem monitoring dan pengendalian suhu pada truk berpendingin (*reefer*) berbasis Internet of Things (IoT).
 
-Sistem menggunakan ESP32 sebagai mikrokontroler utama dan sensor DHT22 untuk membaca suhu serta kelembapan dalam ruang pendingin.
+Sistem menggunakan ESP32 sebagai mikrokontroler utama dan sensor DHT22 untuk membaca suhu dalam ruang pendingin.
 
-Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yaitu kipas pendingin dan kipas stabilisasi. Data monitoring dikirim melalui protokol MQTT dan ditampilkan pada dashboard web, sehingga kondisi suhu dapat dipantau dan pengaturan sistem dapat dilakukan melalui antarmuka pengguna.
+Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yaitu kipas pendingin dan kipas stabilisasi. Data monitoring dikirim melalui protokol MQTT dan ditampilkan pada dashboard web, sehingga kondisi suhu dapat dipantau dan pengaturan sistem dapat dilakukan melalui interface pengguna.
 
 ## Tujuan Proyek
 
