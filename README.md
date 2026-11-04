@@ -1,8 +1,8 @@
-# 🚛 Sistem Monitoring Suhu pada Truk Reefer Berbasis ESP32 dan IoT
+# Sistem Monitoring Suhu pada Truk Reefer Berbasis ESP32 dan IoT
 
 ### Kelompok 7
 
-## 📌 Identitas Kelompok
+## Identitas Kelompok
 
 | Keterangan | Informasi |
 |---|---|
@@ -12,7 +12,7 @@
 | Program Studi | Teknik Komputer |
 
 
-## 👥 Anggota Kelompok
+## Anggota Kelompok
 
 | No. | Nama Anggota | NIM | Pembagian Tugas |
 |---|---|---|---|
@@ -21,7 +21,7 @@
 | 3 | Maharani Tri Wahyuningrum | H1H024012 | Pengembangan Sistem IoT dan Dashboard |
 | 4 | Diva Syahita Mawarni | H1H024015 | Pengujian Sistem dan Dokumentasi |
 
-## 📖 Deskripsi Proyek
+## Deskripsi Proyek
 
 Proyek ini merupakan pengembangan prototipe sistem monitoring dan pengendalian suhu pada truk berpendingin (*reefer*) berbasis Internet of Things (IoT).
 
@@ -29,7 +29,7 @@ Sistem menggunakan ESP32 sebagai mikrokontroler utama dan sensor DHT22 untuk mem
 
 Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yaitu kipas pendingin dan kipas stabilisasi. Data monitoring dikirim melalui protokol MQTT dan ditampilkan pada dashboard web, sehingga kondisi suhu dapat dipantau dan pengaturan sistem dapat dilakukan melalui antarmuka pengguna.
 
-## 🎯 Tujuan Proyek
+## Tujuan Proyek
 
 1. Mengembangkan prototipe monitoring suhu dan kelembapan pada ruang pendingin.
 2. Mengimplementasikan pengendalian kipas otomatis berdasarkan suhu yang terdeteksi.
@@ -37,7 +37,7 @@ Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yait
 4. Mengintegrasikan ESP32 dengan protokol MQTT untuk komunikasi data.
 5. Menerapkan indikator LED dan buzzer sebagai sistem peringatan kondisi suhu.
 
-## 🔧 Komponen Utama
+## Komponen Utama
 
 - ESP32 DevKit
 - Sensor DHT22
@@ -49,7 +49,7 @@ Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yait
 - Box pendingin dan wadah es
 - Breadboard dan kabel jumper
 
-## ⚙️ Mekanisme Kerja Sistem
+## Mekanisme Kerja Sistem
 
 1. Sensor DHT22 membaca suhu dan kelembapan di dalam box pendingin.
 2. ESP32 menerima dan memproses data hasil pembacaan sensor.
@@ -59,7 +59,7 @@ Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yait
 6. Data monitoring dikirim melalui MQTT dan ditampilkan pada dashboard web.
 7. Pengguna dapat memantau kondisi dan mengirimkan perintah pengendalian melalui dashboard.
 
-## 🛠️ Teknologi yang Digunakan
+## Teknologi yang Digunakan
 
 - **Hardware:** ESP32, DHT22, kipas DC, MOSFET
 - **Pemrograman:** C/C++ (Arduino IDE)
@@ -67,13 +67,13 @@ Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yait
 - **MQTT Broker:** HiveMQ
 - **Monitoring:** Dashboard berbasis web
 
-## 📂 Dokumentasi
+## Dokumentasi
 
 Repository ini digunakan untuk menyimpan source code, dokumentasi perancangan, diagram sistem, serta hasil pengembangan dan pengujian prototipe.
 
-## 📝 Status Proyek
+## Status Proyek
 
-🚧 Dalam tahap pengembangan dan pengujian.
+ Dalam tahap pengembangan dan pengujian.
 
 ---
 
