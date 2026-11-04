@@ -43,6 +43,9 @@ Pengendalian suhu dilakukan menggunakan dua kipas DC dengan fungsi berbeda, yait
 - Sensor DHT22
 - 2 Mini Kipas DC
 - Driver MOSFET
+- Dioda 1N4007
+- Resistor 220Ω dan 10 kΩ
+- Kapasitor 470 μF
 - LED indikator (hijau, kuning, merah)
 - Buzzer
 - Catu daya
