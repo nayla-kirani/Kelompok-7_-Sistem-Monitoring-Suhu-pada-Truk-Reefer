@@ -12,11 +12,14 @@ type Config struct {
 
 	DBUser, DBPass, DBHost, DBPort, DBName string
 
-	MQTTBroker, MQTTUser, MQTTPass, MQTTClientID, TopicPrefix string
+	MQTTBroker, MQTTUser, MQTTPass, MQTTClientID string
+	MQTTDataTopic, MQTTCommandTopic              string
 
-	WarnAt     float64 // batas masuk kondisi warning (>= nilai ini)
-	CritAt     float64 // batas masuk kondisi kritis (> nilai ini)
-	Hysteresis float64 // selisih turun supaya status tidak berganti-ganti di sekitar batas
+	DeviceID string
+
+	WarnAt     float64
+	CritAt     float64
+	Hysteresis float64
 	StaleAfter time.Duration
 }
 
@@ -36,21 +39,31 @@ func envFloat(key string, def float64) float64 {
 
 func loadConfig() Config {
 	return Config{
-		Port:         env("PORT", "8080"),
-		APIToken:     env("API_TOKEN", ""),
-		DBUser:       env("DB_USER", "root"),
-		DBPass:       env("DB_PASS", ""),
-		DBHost:       env("DB_HOST", "127.0.0.1"),
-		DBPort:       env("DB_PORT", "3306"),
-		DBName:       env("DB_NAME", "reefer"),
+		Port:     env("PORT", "8080"),
+		APIToken: env("API_TOKEN", ""),
+
+		DBUser: env("DB_USER", "root"),
+		DBPass: env("DB_PASS", ""),
+		DBHost: env("DB_HOST", "127.0.0.1"),
+		DBPort: env("DB_PORT", "3306"),
+		DBName: env("DB_NAME", "reefer"),
+
 		MQTTBroker:   env("MQTT_BROKER", "tcp://broker.hivemq.com:1883"),
 		MQTTUser:     env("MQTT_USER", ""),
 		MQTTPass:     env("MQTT_PASS", ""),
 		MQTTClientID: env("MQTT_CLIENT_ID", "reefer-backend"),
-		TopicPrefix:  env("MQTT_TOPIC_PREFIX", "reefer"),
-		WarnAt:       envFloat("TEMP_WARN", 2),
-		CritAt:       envFloat("TEMP_CRIT", 8),
-		Hysteresis:   envFloat("TEMP_HYSTERESIS", 0.2),
-		StaleAfter:   time.Duration(envFloat("DEVICE_STALE_SECONDS", 30)) * time.Second,
+
+		// Mengikuti topic yang digunakan ESP32
+		MQTTDataTopic:    env("MQTT_DATA_TOPIC", "unsoed/project/coolerbox/data"),
+		MQTTCommandTopic: env("MQTT_COMMAND_TOPIC", "unsoed/project/coolerbox/perintah"),
+
+		// ID perangkat yang digunakan oleh dashboard
+		DeviceID: env("DEVICE_ID", "reefer-01"),
+
+		// Menyesuaikan batas suhu ESP32
+		WarnAt:     envFloat("TEMP_WARN", 19.5),
+		CritAt:     envFloat("TEMP_CRIT", 20.0),
+		Hysteresis: envFloat("TEMP_HYSTERESIS", 0.2),
+		StaleAfter: time.Duration(envFloat("DEVICE_STALE_SECONDS", 30)) * time.Second,
 	}
 }

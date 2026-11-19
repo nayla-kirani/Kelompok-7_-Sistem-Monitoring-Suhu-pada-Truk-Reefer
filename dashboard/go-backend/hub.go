@@ -16,22 +16,37 @@ type Hub struct {
 	db  *gorm.DB
 	cfg Config
 	mq  mqtt.Client
-	mu  sync.Mutex // menjaga pembaruan state dari callback MQTT tetap berurutan
+	mu  sync.Mutex
 }
 
-type FanIn struct {
-	State string `json:"state"`
-	RPM   *int   `json:"rpm"`
-	Fault bool   `json:"fault"`
-}
-
+// Struktur telemetry mengikuti JSON dari firmware ESP32.
 type Telemetry struct {
-	Temperature *float64 `json:"temperature"`
-	Mode        string   `json:"mode"`
-	Fan1        FanIn    `json:"fan1"`
-	Fan2        FanIn    `json:"fan2"`
-	BoxID       string   `json:"box_id"`
-	ItemUID     string   `json:"item_uid"`
+	Temperature *float64 `json:"temp"`
+	Humidity    *float64 `json:"hum"`
+
+	Cooler   string  `json:"cooler"`
+	Status   string  `json:"status"`
+	Buzzer   string  `json:"buzzer"`
+	Muted    string  `json:"muted"`
+	Offset   float64 `json:"offset"`
+	Setpoint float64 `json:"setpoint"`
+	SafeMax  float64 `json:"safe_max"`
+
+	FanCool string `json:"fan_cool"`
+	FanStab int    `json:"fan_stab"`
+
+	Mode          string `json:"mode"`
+	FansOff       string `json:"fans_off"`
+	FansOffReason string `json:"fans_off_reason"`
+
+	PID    string  `json:"pid"`
+	KP     float64 `json:"kp"`
+	KI     float64 `json:"ki"`
+	KD     float64 `json:"kd"`
+	Uptime uint64  `json:"uptime"`
+
+	BoxID   string `json:"box_id"`
+	ItemUID string `json:"item_uid"`
 }
 
 type Scan struct {
@@ -39,12 +54,16 @@ type Scan struct {
 	BoxID   string `json:"box_id"`
 }
 
-var statusLabel = map[string]string{"normal": "Normal", "warning": "Warning", "critical": "Kritis"}
+var statusLabel = map[string]string{
+	"normal":   "Normal",
+	"warning":  "Warning",
+	"critical": "Kritis",
+}
 
 func fan1Text(s string) string {
 	switch s {
 	case "normal":
-		return "menyala, kecepatan normal"
+		return "menyala"
 	case "high":
 		return "menyala, kecepatan tinggi"
 	}
@@ -58,7 +77,6 @@ func fan2Text(s string) string {
 	return "mati"
 }
 
-// clean mengembalikan s kalau termasuk nilai yang diizinkan, selain itu nilai pertama (default).
 func clean(s string, allowed ...string) string {
 	for _, a := range allowed {
 		if s == a {
@@ -68,9 +86,6 @@ func clean(s string, allowed ...string) string {
 	return allowed[0]
 }
 
-// classify menentukan kondisi dari suhu:
-// normal (< WarnAt), warning (WarnAt sampai CritAt), kritis (> CritAt).
-// Hysteresis mencegah status berganti-ganti saat suhu naik turun tipis di sekitar batas.
 func classify(prev string, t float64, cfg Config) string {
 	switch {
 	case t > cfg.CritAt:
@@ -81,26 +96,36 @@ func classify(prev string, t float64, cfg Config) string {
 		}
 		return "warning"
 	default:
-		if (prev == "warning" || prev == "critical") && t >= cfg.WarnAt-cfg.Hysteresis {
+		if (prev == "warning" || prev == "critical") &&
+			t >= cfg.WarnAt-cfg.Hysteresis {
 			return "warning"
 		}
 		return "normal"
 	}
 }
 
-// loadState memuat state perangkat; existed=false kalau perangkat belum pernah mengirim telemetry.
 func (h *Hub) loadState(id string) (st DeviceState, existed bool) {
-	existed = h.db.Where("device_id = ?", id).Limit(1).Find(&st).RowsAffected > 0
+	existed = h.db.Where("device_id = ?", id).
+		Limit(1).
+		Find(&st).RowsAffected > 0
+
 	if !existed {
 		st.DeviceID = id
 	}
+
 	return
 }
 
 func (h *Hub) onTelemetry(id string, b []byte) {
 	var in Telemetry
-	if err := json.Unmarshal(b, &in); err != nil || in.Temperature == nil {
+
+	if err := json.Unmarshal(b, &in); err != nil {
 		log.Printf("telemetry %s tidak valid: %s", id, b)
+		return
+	}
+
+	if in.Temperature == nil {
+		log.Printf("telemetry %s tidak memiliki data suhu: %s", id, b)
 		return
 	}
 
@@ -108,39 +133,63 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 	defer h.mu.Unlock()
 
 	st, existed := h.loadState(id)
+
 	now := time.Now().UTC()
 	t := *in.Temperature
+
 	status := classify(st.Status, t, h.cfg)
-	mode := clean(in.Mode, "auto", "manual")
-	f1 := clean(in.Fan1.State, "off", "normal", "high")
-	f2 := clean(in.Fan2.State, "off", "on")
+
+	// Mode dari ESP32: OFF, FAILSAFE, COOLING, HOLD, atau IDLE.
+	mode := strings.ToUpper(strings.TrimSpace(in.Mode))
+	if mode == "" {
+		mode = "UNKNOWN"
+	}
+
+	// Fan cooling ESP32: ON/OFF.
+	f1 := "off"
+	if strings.EqualFold(in.FanCool, "ON") {
+		f1 = "normal"
+	}
+
+	// Fan stabilisasi ESP32: nilai PWM 0-100.
+	f2 := "off"
+	if in.FanStab > 0 {
+		f2 = "on"
+	}
 
 	var evs []Event
+
 	add := func(typ, msg string) {
-		evs = append(evs, Event{DeviceID: id, Type: typ, Message: msg, CreatedAt: now})
+		evs = append(evs, Event{
+			DeviceID:  id,
+			Type:      typ,
+			Message:   msg,
+			CreatedAt: now,
+		})
 	}
 
 	if existed {
 		if !st.Online {
 			add("info", "Perangkat kembali online")
 		}
+
 		if status != st.Status {
-			add(status, fmt.Sprintf("Kondisi %s, suhu %.1f°C", statusLabel[status], t))
+			add("info", fmt.Sprintf(
+				"Kondisi %s, suhu %.1f°C",
+				statusLabel[status], t,
+			))
 		}
+
 		if f1 != st.Fan1State {
 			add("info", "Kipas 1 "+fan1Text(f1))
 		}
+
 		if f2 != st.Fan2State {
 			add("info", "Kipas 2 "+fan2Text(f2))
 		}
+
 		if mode != st.Mode {
 			add("info", "Mode berubah ke "+mode)
-		}
-		if in.Fan1.Fault && !st.Fan1Fault {
-			add("critical", "Kipas 1 bermasalah, tidak berputar")
-		}
-		if in.Fan2.Fault && !st.Fan2Fault {
-			add("critical", "Kipas 2 bermasalah, tidak berputar")
 		}
 	} else {
 		add("info", "Perangkat pertama kali terhubung")
@@ -150,23 +199,58 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 		add("info", "Barang terpasang: "+h.itemLabel(in.ItemUID))
 		st.ItemUID = in.ItemUID
 	}
+
 	if in.BoxID != "" {
 		st.BoxID = in.BoxID
 	}
 
-	st.Temperature, st.Status, st.Mode = t, status, mode
-	st.Fan1State, st.Fan1RPM, st.Fan1Fault = f1, in.Fan1.RPM, in.Fan1.Fault
-	st.Fan2State, st.Fan2RPM, st.Fan2Fault = f2, in.Fan2.RPM, in.Fan2.Fault
-	st.Online, st.LastSeen, st.UpdatedAt = true, now, now
+	st.Temperature = t
+	st.Status = status
+	st.Mode = mode
 
-	h.db.Save(&st)
-	h.db.Create(&Reading{DeviceID: id, Temperature: t, Status: status, CreatedAt: now})
-	if len(evs) > 0 {
-		h.db.Create(&evs)
+	// Firmware belum mengirim data RPM atau fault kipas.
+	st.Fan1State = f1
+	st.Fan1RPM = nil
+	st.Fan1Fault = false
+
+	st.Fan2State = f2
+	st.Fan2RPM = nil
+	st.Fan2Fault = false
+
+	st.Online = true
+	st.LastSeen = now
+	st.UpdatedAt = now
+
+	if err := h.db.Save(&st).Error; err != nil {
+		log.Println("Gagal menyimpan state:", err)
+		return
 	}
+
+	if err := h.db.Create(&Reading{
+		DeviceID:    id,
+		Temperature: t,
+		Status:      status,
+		CreatedAt:   now,
+	}).Error; err != nil {
+		log.Println("Gagal menyimpan reading:", err)
+	}
+
+	if len(evs) > 0 {
+		if err := h.db.Create(&evs).Error; err != nil {
+			log.Println("Gagal menyimpan event:", err)
+		}
+	}
+
+	log.Printf(
+		"Telemetry diterima | suhu: %.1f°C | kelembapan: %v | mode: %s | fan cooling: %s | fan stabilisasi: %d%%",
+		t,
+		in.Humidity,
+		mode,
+		in.FanCool,
+		in.FanStab,
+	)
 }
 
-// onStatus menerima "online"/"offline" (offline dikirim broker lewat Last Will ESP32).
 func (h *Hub) onStatus(id, payload string) {
 	online := strings.TrimSpace(payload) == "online"
 
@@ -175,25 +259,35 @@ func (h *Hub) onStatus(id, payload string) {
 
 	st, existed := h.loadState(id)
 	if !existed {
-		return // tunggu telemetry pertama supaya state punya data lengkap
+		return
 	}
+
 	if st.Online != online {
 		msg := "Perangkat offline"
 		if online {
 			msg = "Perangkat online"
 		}
-		h.db.Create(&Event{DeviceID: id, Type: "info", Message: msg, CreatedAt: time.Now().UTC()})
+
+		h.db.Create(&Event{
+			DeviceID:  id,
+			Type:      "info",
+			Message:   msg,
+			CreatedAt: time.Now().UTC(),
+		})
 	}
+
 	st.Online = online
+
 	if online {
 		st.LastSeen = time.Now().UTC()
 	}
+
 	h.db.Save(&st)
 }
 
-// onScan menerima hasil scan barcode/UID dari ESP32.
 func (h *Hub) onScan(id string, b []byte) {
 	var in Scan
+
 	if err := json.Unmarshal(b, &in); err != nil || in.ItemUID == "" {
 		log.Printf("scan %s tidak valid: %s", id, b)
 		return
@@ -206,19 +300,29 @@ func (h *Hub) onScan(id string, b []byte) {
 	if !existed {
 		return
 	}
+
 	st.ItemUID = in.ItemUID
+
 	if in.BoxID != "" {
 		st.BoxID = in.BoxID
 	}
+
 	h.db.Save(&st)
-	h.db.Create(&Event{DeviceID: id, Type: "info", Message: "Barang discan: " + h.itemLabel(in.ItemUID), CreatedAt: time.Now().UTC()})
+
+	h.db.Create(&Event{
+		DeviceID:  id,
+		Type:      "info",
+		Message:   "Barang discan: " + h.itemLabel(in.ItemUID),
+		CreatedAt: time.Now().UTC(),
+	})
 }
 
-// itemLabel menampilkan "Nama (UID)" kalau barang sudah terdaftar, kalau belum cukup UID.
 func (h *Hub) itemLabel(uid string) string {
 	var it Item
+
 	if h.db.Where("uid = ?", uid).Limit(1).Find(&it).RowsAffected > 0 {
 		return fmt.Sprintf("%s (%s)", it.Name, uid)
 	}
+
 	return uid
 }

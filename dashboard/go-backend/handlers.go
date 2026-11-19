@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -11,7 +12,9 @@ import (
 )
 
 func (h *Hub) routes(app *fiber.App) {
-	app.Get("/health", func(c fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	app.Get("/health", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{"ok": true})
+	})
 
 	api := app.Group("/api", h.auth)
 	api.Get("/devices/:id/latest", h.latest)
@@ -23,12 +26,14 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Post("/items", h.saveItem)
 }
 
-// auth memeriksa Bearer token. Kalau API_TOKEN kosong, pemeriksaan dilewati (hanya untuk development).
 func (h *Hub) auth(c fiber.Ctx) error {
 	if h.cfg.APIToken == "" || c.Get("Authorization") == "Bearer "+h.cfg.APIToken {
 		return c.Next()
 	}
-	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "token tidak valid"})
+
+	return c.Status(fiber.StatusUnauthorized).JSON(
+		fiber.Map{"message": "token tidak valid"},
+	)
 }
 
 func fail(c fiber.Ctx, code int, msg string) error {
@@ -58,12 +63,14 @@ type Latest struct {
 
 func (h *Hub) latest(c fiber.Ctx) error {
 	id := c.Params("id")
+
 	st, existed := h.loadState(id)
 	if !existed {
 		return fail(c, fiber.StatusNotFound, "perangkat belum pernah mengirim data")
 	}
 
 	var name string
+
 	if st.ItemUID != "" {
 		var it Item
 		if h.db.Where("uid = ?", st.ItemUID).Limit(1).Find(&it).RowsAffected > 0 {
@@ -81,10 +88,9 @@ func (h *Hub) latest(c fiber.Ctx) error {
 		Mode:        st.Mode,
 		Fan1:        FanOut{st.Fan1State, st.Fan1RPM, st.Fan1Fault},
 		Fan2:        FanOut{st.Fan2State, st.Fan2RPM, st.Fan2Fault},
-		// Dianggap offline kalau tidak ada data baru lebih lama dari DEVICE_STALE_SECONDS.
-		Online:    st.Online && time.Since(st.LastSeen) < h.cfg.StaleAfter,
-		LastSeen:  st.LastSeen,
-		UpdatedAt: st.UpdatedAt,
+		Online:      st.Online && time.Since(st.LastSeen) < h.cfg.StaleAfter,
+		LastSeen:    st.LastSeen,
+		UpdatedAt:   st.UpdatedAt,
 	})
 }
 
@@ -93,10 +99,11 @@ type Point struct {
 	Temp float64   `json:"temp"`
 }
 
-// history mengembalikan suhu rata-rata per bucket waktu supaya grafik tetap ringan.
 func (h *Hub) history(c fiber.Ctx) error {
 	id := c.Params("id")
+
 	dur, bucket := time.Hour, int64(10)
+
 	switch c.Query("range", "1h") {
 	case "6h":
 		dur, bucket = 6*time.Hour, 60
@@ -105,29 +112,40 @@ func (h *Hub) history(c fiber.Ctx) error {
 	}
 
 	var rows []Reading
+
 	h.db.Select("created_at", "temperature").
 		Where("device_id = ? AND created_at >= ?", id, time.Now().UTC().Add(-dur)).
-		Order("created_at asc").Find(&rows)
+		Order("created_at asc").
+		Find(&rows)
 
 	out := []Point{}
 	var sum float64
 	var n int
 	var key int64 = -1
+
 	flush := func() {
 		if n > 0 {
-			out = append(out, Point{T: time.Unix(key*bucket, 0).UTC(), Temp: math.Round(sum/float64(n)*100) / 100})
+			out = append(out, Point{
+				T:    time.Unix(key*bucket, 0).UTC(),
+				Temp: math.Round(sum/float64(n)*100) / 100,
+			})
 		}
 	}
+
 	for _, r := range rows {
 		k := r.CreatedAt.Unix() / bucket
+
 		if k != key {
 			flush()
 			key, sum, n = k, 0, 0
 		}
+
 		sum += r.Temperature
 		n++
 	}
+
 	flush()
+
 	return c.JSON(out)
 }
 
@@ -139,23 +157,37 @@ type EventOut struct {
 
 func (h *Hub) events(c fiber.Ctx) error {
 	limit, err := strconv.Atoi(c.Query("limit", "30"))
+
 	if err != nil || limit < 1 || limit > 100 {
 		limit = 30
 	}
+
 	var rows []Event
-	h.db.Where("device_id = ?", c.Params("id")).Order("created_at desc").Limit(limit).Find(&rows)
+
+	h.db.Where("device_id = ?", c.Params("id")).
+		Order("created_at desc").
+		Limit(limit).
+		Find(&rows)
 
 	out := make([]EventOut, 0, len(rows))
+
 	for _, e := range rows {
-		out = append(out, EventOut{Time: e.CreatedAt, Type: e.Type, Message: e.Message})
+		out = append(out, EventOut{
+			Time:    e.CreatedAt,
+			Type:    e.Type,
+			Message: e.Message,
+		})
 	}
+
 	return c.JSON(out)
 }
 
+// ControlReq menerima perintah dari dashboard.
 type ControlReq struct {
-	Mode *string `json:"mode,omitempty"`
-	Fan1 *string `json:"fan1,omitempty"`
-	Fan2 *string `json:"fan2,omitempty"`
+	Mode    *string `json:"mode,omitempty"`
+	Fan1    *string `json:"fan1,omitempty"`
+	Fan2    *string `json:"fan2,omitempty"`
+	Command *string `json:"command,omitempty"`
 }
 
 func in(v string, allowed ...string) bool {
@@ -164,51 +196,128 @@ func in(v string, allowed ...string) bool {
 			return true
 		}
 	}
+
 	return false
+}
+
+// translateCommand mengubah input dashboard menjadi perintah teks ESP32.
+func translateCommand(req ControlReq) (string, string, error) {
+	count := 0
+
+	if req.Mode != nil {
+		count++
+	}
+	if req.Fan1 != nil {
+		count++
+	}
+	if req.Fan2 != nil {
+		count++
+	}
+	if req.Command != nil {
+		count++
+	}
+
+	if count != 1 {
+		return "", "", fmt.Errorf("kirim satu perintah dalam satu waktu")
+	}
+
+	if req.Command != nil {
+		command := strings.ToUpper(strings.TrimSpace(*req.Command))
+
+		allowed := []string{
+			"COOLER_ON",
+			"COOLER_OFF",
+			"MUTE",
+			"UNMUTE",
+			"TEMP_UP",
+			"TEMP_DOWN",
+			"TEMP_RESET",
+			"PID_ON",
+			"PID_OFF",
+		}
+
+		if !in(command, allowed...) {
+			return "", "", fmt.Errorf("perintah ESP32 tidak dikenali")
+		}
+
+		return command, command, nil
+	}
+
+	if req.Mode != nil {
+		return "", "", fmt.Errorf(
+			"firmware ESP32 belum mendukung pengaturan mode auto/manual",
+		)
+	}
+
+	if req.Fan1 != nil {
+		switch *req.Fan1 {
+		case "normal":
+			return "COOLER_ON", "kipas pendingin menyala", nil
+		case "off":
+			return "COOLER_OFF", "kipas pendingin mati", nil
+		case "high":
+			return "", "", fmt.Errorf(
+				"pengaturan kecepatan tinggi belum didukung firmware ESP32",
+			)
+		default:
+			return "", "", fmt.Errorf("nilai kipas 1 tidak valid")
+		}
+	}
+
+	if req.Fan2 != nil {
+		switch *req.Fan2 {
+		case "on":
+			return "PID_ON", "PID aktif", nil
+		case "off":
+			return "PID_OFF", "PID nonaktif", nil
+		default:
+			return "", "", fmt.Errorf("nilai kipas 2 tidak valid")
+		}
+	}
+
+	return "", "", fmt.Errorf("perintah tidak valid")
 }
 
 func (h *Hub) control(c fiber.Ctx) error {
 	id := c.Params("id")
+
 	var req ControlReq
+
 	if err := c.Bind().Body(&req); err != nil {
 		return fail(c, fiber.StatusBadRequest, "body JSON tidak valid")
 	}
-	if req.Mode == nil && req.Fan1 == nil && req.Fan2 == nil {
-		return fail(c, fiber.StatusBadRequest, "tidak ada perintah yang dikirim")
-	}
-	if (req.Mode != nil && !in(*req.Mode, "auto", "manual")) ||
-		(req.Fan1 != nil && !in(*req.Fan1, "off", "normal", "high")) ||
-		(req.Fan2 != nil && !in(*req.Fan2, "off", "on")) {
-		return fail(c, fiber.StatusUnprocessableEntity, "nilai perintah tidak valid")
+
+	payload, description, err := translateCommand(req)
+
+	if err != nil {
+		return fail(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
 
-	st, existed := h.loadState(id)
+	_, existed := h.loadState(id)
+
 	if !existed {
 		return fail(c, fiber.StatusNotFound, "perangkat belum pernah mengirim data")
 	}
-	// Perintah kipas hanya dipakai di mode manual.
-	if (req.Fan1 != nil || req.Fan2 != nil) && st.Mode != "manual" && (req.Mode == nil || *req.Mode != "manual") {
-		return fail(c, fiber.StatusConflict, "ubah ke mode manual dulu sebelum mengatur kipas")
+
+	if err := h.publishCmd(id, []byte(payload)); err != nil {
+		return fail(
+			c,
+			fiber.StatusBadGateway,
+			"perintah gagal dikirim: "+err.Error(),
+		)
 	}
 
-	payload, _ := json.Marshal(req)
-	if err := h.publishCmd(id, payload); err != nil {
-		return fail(c, fiber.StatusBadGateway, "perintah gagal dikirim: "+err.Error())
-	}
+	h.db.Create(&Event{
+		DeviceID:  id,
+		Type:      "info",
+		Message:   "Perintah dari dashboard: " + description,
+		CreatedAt: time.Now().UTC(),
+	})
 
-	var parts []string
-	if req.Mode != nil {
-		parts = append(parts, "mode "+*req.Mode)
-	}
-	if req.Fan1 != nil {
-		parts = append(parts, "kipas 1 "+*req.Fan1)
-	}
-	if req.Fan2 != nil {
-		parts = append(parts, "kipas 2 "+*req.Fan2)
-	}
-	h.db.Create(&Event{DeviceID: id, Type: "info", Message: "Perintah dari dashboard: " + strings.Join(parts, ", "), CreatedAt: time.Now().UTC()})
-
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": "perintah dikirim"})
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"message": "perintah berhasil dikirim",
+		"command": payload,
+	})
 }
 
 type ScanReq struct {
@@ -216,40 +325,56 @@ type ScanReq struct {
 	BoxID   string `json:"box_id"`
 }
 
-// scan menerima hasil scan barcode dari kamera dashboard.
-// Alurnya sama dengan scan dari ESP32 lewat MQTT (topic .../scan), jadi memakai onScan.
 func (h *Hub) scan(c fiber.Ctx) error {
 	id := c.Params("id")
+
 	var req ScanReq
+
 	if err := c.Bind().Body(&req); err != nil {
 		return fail(c, fiber.StatusBadRequest, "body JSON tidak valid")
 	}
+
 	req.ItemUID = strings.TrimSpace(req.ItemUID)
+
 	if req.ItemUID == "" || len(req.ItemUID) > 64 {
-		return fail(c, fiber.StatusUnprocessableEntity, "item_uid wajib diisi (maksimal 64 karakter)")
+		return fail(
+			c,
+			fiber.StatusUnprocessableEntity,
+			"item_uid wajib diisi (maksimal 64 karakter)",
+		)
 	}
+
 	if _, existed := h.loadState(id); !existed {
 		return fail(c, fiber.StatusNotFound, "perangkat belum pernah mengirim data")
 	}
+
 	b, _ := json.Marshal(req)
+
 	h.onScan(id, b)
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": "scan tersimpan"})
+
+	return c.Status(fiber.StatusAccepted).JSON(
+		fiber.Map{"message": "scan tersimpan"},
+	)
 }
 
 func (h *Hub) listItems(c fiber.Ctx) error {
 	items := []Item{}
+
 	h.db.Order("name asc").Find(&items)
+
 	return c.JSON(items)
 }
 
-// saveItem mendaftarkan atau memperbarui nama barang untuk sebuah UID.
 func (h *Hub) saveItem(c fiber.Ctx) error {
 	var it Item
+
 	if err := c.Bind().Body(&it); err != nil || it.UID == "" || it.Name == "" {
 		return fail(c, fiber.StatusBadRequest, "uid dan name wajib diisi")
 	}
+
 	if err := h.db.Save(&it).Error; err != nil {
 		return fail(c, fiber.StatusInternalServerError, "gagal menyimpan barang")
 	}
+
 	return c.Status(fiber.StatusCreated).JSON(it)
 }
