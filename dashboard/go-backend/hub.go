@@ -35,18 +35,22 @@ type Telemetry struct {
 	FanCool string `json:"fan_cool"`
 	FanStab int    `json:"fan_stab"`
 
-	Mode          string `json:"mode"`
-	FansOff       string `json:"fans_off"`
-	FansOffReason string `json:"fans_off_reason"`
+	FanAOn      bool   `json:"fan_a_on"`
+	FanBOn      bool   `json:"fan_b_on"`
+	FanAPercent int    `json:"fan_a_percent"`
+	FanBPercent int    `json:"fan_b_percent"`
+	FanAMode    string `json:"fan_a_mode"`
+	FanBMode    string `json:"fan_b_mode"`
 
-	PID    string  `json:"pid"`
-	KP     float64 `json:"kp"`
-	KI     float64 `json:"ki"`
-	KD     float64 `json:"kd"`
-	Uptime uint64  `json:"uptime"`
-
-	BoxID   string `json:"box_id"`
-	ItemUID string `json:"item_uid"`
+	Mode      string  `json:"mode"`
+	PID       string  `json:"pid"`
+	KP        float64 `json:"kp"`
+	KI        float64 `json:"ki"`
+	KD        float64 `json:"kd"`
+	PIDOutput float64 `json:"pid_output"`
+	Uptime    uint64  `json:"uptime"`
+	BoxID     string  `json:"box_id"`
+	ItemUID   string  `json:"item_uid"`
 }
 
 type Scan struct {
@@ -145,15 +149,31 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 		mode = "UNKNOWN"
 	}
 
-	// Fan cooling ESP32: ON/OFF.
+	// Fan A = kipas pendingin.
+	fan1Percent := in.FanAPercent
+	if fan1Percent < 0 {
+		fan1Percent = 0
+	}
+	if fan1Percent > 100 {
+		fan1Percent = 100
+	}
+
 	f1 := "off"
-	if strings.EqualFold(in.FanCool, "ON") {
+	if fan1Percent > 0 {
 		f1 = "normal"
 	}
 
-	// Fan stabilisasi ESP32: nilai PWM 0-100.
+	// Fan B = kipas penjaga suhu.
+	fan2Percent := in.FanBPercent
+	if fan2Percent < 0 {
+		fan2Percent = 0
+	}
+	if fan2Percent > 100 {
+		fan2Percent = 100
+	}
+
 	f2 := "off"
-	if in.FanStab > 0 {
+	if fan2Percent > 0 {
 		f2 = "on"
 	}
 
@@ -208,14 +228,17 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 	st.Status = status
 	st.Mode = mode
 
-	// Firmware belum mengirim data RPM atau fault kipas.
+	// Fan A = pendingin.
 	st.Fan1State = f1
 	st.Fan1RPM = nil
 	st.Fan1Fault = false
+	st.Fan1Percent = fan1Percent
 
+	// Fan B = penjaga suhu.
 	st.Fan2State = f2
 	st.Fan2RPM = nil
 	st.Fan2Fault = false
+	st.Fan2Percent = fan2Percent
 
 	st.Online = true
 	st.LastSeen = now

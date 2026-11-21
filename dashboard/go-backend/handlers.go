@@ -3,11 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"gorm.io/gorm"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -47,9 +48,10 @@ func fail(c fiber.Ctx, code int, msg string) error {
 }
 
 type FanOut struct {
-	State string `json:"state"`
-	RPM   *int   `json:"rpm"`
-	Fault bool   `json:"fault"`
+	State   string `json:"state"`
+	RPM     *int   `json:"rpm"`
+	Fault   bool   `json:"fault"`
+	Percent int    `json:"percent"`
 }
 
 type Latest struct {
@@ -92,11 +94,26 @@ func (h *Hub) latest(c fiber.Ctx) error {
 		Temperature: st.Temperature,
 		Status:      st.Status,
 		Mode:        st.Mode,
-		Fan1:        FanOut{st.Fan1State, st.Fan1RPM, st.Fan1Fault},
-		Fan2:        FanOut{st.Fan2State, st.Fan2RPM, st.Fan2Fault},
-		Online:      st.Online && time.Since(st.LastSeen) < h.cfg.StaleAfter,
-		LastSeen:    st.LastSeen,
-		UpdatedAt:   st.UpdatedAt,
+
+		// Fan 1 = Fan A (pendingin).
+		Fan1: FanOut{
+			State:   st.Fan1State,
+			RPM:     st.Fan1RPM,
+			Fault:   st.Fan1Fault,
+			Percent: st.Fan1Percent,
+		},
+
+		// Fan 2 = Fan B (penjaga suhu).
+		Fan2: FanOut{
+			State:   st.Fan2State,
+			RPM:     st.Fan2RPM,
+			Fault:   st.Fan2Fault,
+			Percent: st.Fan2Percent,
+		},
+
+		Online:    st.Online && time.Since(st.LastSeen) < h.cfg.StaleAfter,
+		LastSeen:  st.LastSeen,
+		UpdatedAt: st.UpdatedAt,
 	})
 }
 
