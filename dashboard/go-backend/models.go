@@ -44,3 +44,26 @@ type Item struct {
 	UID  string `gorm:"primaryKey;size:64" json:"uid"`
 	Name string `gorm:"size:128" json:"name"`
 }
+
+// Box menyimpan identitas dan status setiap box.
+type Box struct {
+    UID       string `gorm:"primaryKey;size:64" json:"uid"`
+    Status    string `gorm:"size:16;not null;default:available" json:"status"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Shipment menyimpan data transaksi pengiriman.
+type Shipment struct {
+    TransactionID string `gorm:"primaryKey;size:64" json:"transaction_id"`
+    BoxUID        string `gorm:"uniqueIndex;size:64;not null" json:"box_uid"`
+
+    DriverDistributorName string `gorm:"size:128;not null" json:"driver_distributor_name"`
+    ItemName   string  `gorm:"size:128;not null" json:"item_name"`
+    WeightKg   float64 `gorm:"not null" json:"weight_kg"`
+
+    CreatedAt time.Time  `json:"created_at"`
+    UpdatedAt time.Time  `json:"updated_at"`
+    EditCount uint8      `gorm:"not null;default:0" json:"edit_count"`
+    EditedAt  *time.Time `json:"edited_at"`
+}

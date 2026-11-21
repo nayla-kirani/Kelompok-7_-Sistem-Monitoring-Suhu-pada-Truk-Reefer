@@ -3,14 +3,52 @@
 use App\Http\Controllers\DashboardController;
 use Illuminate\Support\Facades\Route;
 
-// Tambahkan middleware 'auth' di sini kalau dashboard butuh login.
-Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
+// Halaman utama dashboard
+Route::get('/', [DashboardController::class, 'index'])
+    ->name('dashboard');
 
 Route::prefix('dashboard')->group(function () {
-    Route::get('latest', [DashboardController::class, 'latest'])->name('dashboard.latest');
-    Route::get('history', [DashboardController::class, 'history'])->name('dashboard.history');
-    Route::get('events', [DashboardController::class, 'events'])->name('dashboard.events');
-    Route::post('control', [DashboardController::class, 'control'])->name('dashboard.control');
-    Route::post('scan', [DashboardController::class, 'scan'])->name('dashboard.scan');
-    Route::post('items', [DashboardController::class, 'saveItem'])->name('dashboard.items');
+
+    // Monitoring suhu
+    Route::get('latest', [DashboardController::class, 'latest'])
+        ->name('dashboard.latest');
+
+    Route::get('history', [DashboardController::class, 'history'])
+        ->name('dashboard.history');
+
+    Route::get('events', [DashboardController::class, 'events'])
+        ->name('dashboard.events');
+
+    // Kontrol perangkat
+    Route::post('control', [DashboardController::class, 'control'])
+        ->name('dashboard.control');
+
+    // Scan lama (tetap dipertahankan)
+    Route::post('scan', [DashboardController::class, 'scan'])
+        ->name('dashboard.scan');
+
+    // Data barang lama (tetap dipertahankan)
+    Route::post('items', [DashboardController::class, 'saveItem'])
+        ->name('dashboard.items');
+
+    // Validasi UID barcode box
+    Route::get('boxes/{uid}/validate', [DashboardController::class, 'validateBox'])
+        ->name('dashboard.boxes.validate');
+
+    // Transaksi pengiriman
+    Route::post('shipments', [DashboardController::class, 'createShipment'])
+        ->name('dashboard.shipments.store');
+
+    // Ambil transaksi terakhir
+    // Harus berada sebelum route shipments/{id}
+    Route::get('shipments/latest', [DashboardController::class, 'latestShipment'])
+        ->name('dashboard.shipments.latest');
+
+    // Detail transaksi berdasarkan ID
+    Route::get('shipments/{id}', [DashboardController::class, 'getShipment'])
+        ->name('dashboard.shipments.show');
+
+    // Edit transaksi (maksimal satu kali, dibatasi backend Go)
+    Route::put('shipments/{id}', [DashboardController::class, 'updateShipment'])
+        ->name('dashboard.shipments.update');
 });

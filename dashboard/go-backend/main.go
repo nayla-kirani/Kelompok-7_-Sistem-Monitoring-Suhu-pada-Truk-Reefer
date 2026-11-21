@@ -16,13 +16,25 @@ func main() {
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
 		cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
+
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatal("gagal konek MySQL: ", err)
 	}
-	if err := db.AutoMigrate(&DeviceState{}, &Reading{}, &Event{}, &Item{}); err != nil {
+
+	// Membuat atau memperbarui tabel database.
+	if err := db.AutoMigrate(
+		&DeviceState{},
+		&Reading{},
+		&Event{},
+		&Item{},
+		&Box{},
+		&Shipment{},
+	); err != nil {
 		log.Fatal("gagal migrasi tabel: ", err)
 	}
+
+	log.Println("Migrasi database berhasil")
 
 	hub := &Hub{db: db, cfg: cfg}
 	hub.connectMQTT()

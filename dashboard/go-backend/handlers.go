@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"gorm.io/gorm"
 	"math"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Post("/devices/:id/scan", h.scan)
 	api.Get("/items", h.listItems)
 	api.Post("/items", h.saveItem)
+	api.Get("/boxes/:uid/validate", h.validateBox)
+	api.Get("/shipments/latest", h.getLatestShipment)
+	api.Post("/shipments", h.createShipment)
+	api.Get("/shipments/:id", h.getShipment)
+	api.Put("/shipments/:id", h.updateShipment)
 }
 
 func (h *Hub) auth(c fiber.Ctx) error {
@@ -377,4 +383,41 @@ func (h *Hub) saveItem(c fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(it)
+}
+
+// validateBox memvalidasi UID barcode sebelum transaksi dibuat.
+func (h *Hub) validateBox(c fiber.Ctx) error {
+	uid := strings.TrimSpace(c.Params("uid"))
+
+	if uid == "" || len(uid) > 64 {
+		return fail(c, fiber.StatusBadRequest, "UID box tidak valid")
+	}
+
+	var box Box
+
+	result := h.db.First(&box, "uid = ?", uid)
+
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return fail(c, fiber.StatusNotFound, "UID box tidak terdaftar")
+		}
+
+		return fail(c, fiber.StatusInternalServerError, "gagal memeriksa UID box")
+	}
+
+	if box.Status != "available" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"valid":   false,
+			"message": "Box sudah pernah digunakan dan tidak dapat digunakan kembali",
+			"uid":     box.UID,
+			"status":  box.Status,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"valid":   true,
+		"message": "UID box valid dan dapat digunakan",
+		"uid":     box.UID,
+		"status":  box.Status,
+	})
 }
