@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -21,9 +22,6 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Get("/devices/:id/events", h.events)
 	api.Post("/devices/:id/control", h.control)
 	api.Post("/devices/:id/scan", h.scan)
-	api.Get("/devices/:id/shipments", h.listShipments)
-	api.Post("/devices/:id/shipments", h.createShipment)
-	api.Put("/devices/:id/shipments/:sid", h.updateShipment)
 	api.Get("/items", h.listItems)
 	api.Post("/items", h.saveItem)
 }
@@ -61,7 +59,6 @@ type Latest struct {
 	Online      bool      `json:"online"`
 	LastSeen    time.Time `json:"last_seen"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	Shipment    *ShipmentOut `json:"shipment"`
 }
 
 func (h *Hub) latest(c fiber.Ctx) error {
@@ -81,18 +78,7 @@ func (h *Hub) latest(c fiber.Ctx) error {
 		}
 	}
 
-	var ship *ShipmentOut
-
-	if st.ShipmentID != nil {
-		var sp Shipment
-		if h.db.Where("id = ?", *st.ShipmentID).Limit(1).Find(&sp).RowsAffected > 0 {
-			o := toShipmentOut(sp)
-			ship = &o
-		}
-	}
-
 	return c.JSON(Latest{
-		Shipment:    ship,
 		DeviceID:    st.DeviceID,
 		BoxID:       st.BoxID,
 		ItemUID:     st.ItemUID,
@@ -358,36 +344,17 @@ func (h *Hub) scan(c fiber.Ctx) error {
 		)
 	}
 
-	st, existed := h.loadState(id)
-	if !existed {
+	if _, existed := h.loadState(id); !existed {
 		return fail(c, fiber.StatusNotFound, "perangkat belum pernah mengirim data")
 	}
 
-	// Cocokkan UID/barcode dengan database.
-	var it Item
-	if h.db.Where("uid = ?", req.ItemUID).Limit(1).Find(&it).RowsAffected == 0 {
-		return fail(c, fiber.StatusNotFound, "barcode/UID tidak terdaftar di database")
-	}
+	b, _ := json.Marshal(req)
 
-	// Kalau barcode ini sudah punya pengiriman aktif di box ini, kirim datanya
-	// supaya form terbuka dalam mode edit/lihat, bukan membuat data ganda.
-	var active *ShipmentOut
+	h.onScan(id, b)
 
-	if st.ShipmentID != nil {
-		var sp Shipment
-		if h.db.Where("id = ? AND item_uid = ?", *st.ShipmentID, req.ItemUID).
-			Limit(1).Find(&sp).RowsAffected > 0 {
-			o := toShipmentOut(sp)
-			active = &o
-		}
-	}
-
-	return c.JSON(fiber.Map{
-		"item_uid":    it.UID,
-		"item_name":   it.Name,
-		"server_time": time.Now().UTC(),
-		"active":      active,
-	})
+	return c.Status(fiber.StatusAccepted).JSON(
+		fiber.Map{"message": "scan tersimpan"},
+	)
 }
 
 func (h *Hub) listItems(c fiber.Ctx) error {
