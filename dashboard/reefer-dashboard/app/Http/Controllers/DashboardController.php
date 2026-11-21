@@ -136,7 +136,64 @@ class DashboardController extends Controller
     }
 
     /**
+     * Mengambil seluruh daftar box.
+     */
+    public function listBoxes(): JsonResponse
+    {
+        return $this->forward(
+            'GET',
+            '/api/boxes'
+        );
+    }
+
+    /**
+     * Mendaftarkan beberapa box sekaligus.
+     */
+    public function createBoxesBulk(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'boxes' => 'required|array|min:1|max:100',
+            'boxes.*.uid' => 'required|string|max:64|distinct',
+            'boxes.*.item_name' => 'required|string|max:128',
+            'boxes.*.weight_kg' => 'required|numeric|gt:0|lte:100000',
+        ]);
+
+        return $this->forward(
+            'POST',
+            '/api/boxes/bulk',
+            $data
+        );
+    }
+
+    /**
+     * Mengedit data box yang belum digunakan.
+     * Backend Go tetap memeriksa status box.
+     */
+    public function updateBox(Request $request, string $uid): JsonResponse
+    {
+        $uid = trim($uid);
+
+        if ($uid === '' || strlen($uid) > 64) {
+            return response()->json([
+                'message' => 'UID box tidak valid',
+            ], 422);
+        }
+
+        $data = $request->validate([
+            'item_name' => 'required|string|max:128',
+            'weight_kg' => 'required|numeric|gt:0|lte:100000',
+        ]);
+
+        return $this->forward(
+            'PUT',
+            '/api/boxes/' . rawurlencode($uid),
+            $data
+        );
+    }
+
+    /**
      * Memvalidasi UID box hasil scan barcode.
+     * Data barang dan berat diambil dari database Box.
      */
     public function validateBox(string $uid): JsonResponse
     {
@@ -144,6 +201,7 @@ class DashboardController extends Controller
 
         if ($uid === '' || strlen($uid) > 64) {
             return response()->json([
+                'valid' => false,
                 'message' => 'UID box tidak valid',
             ], 422);
         }
@@ -156,14 +214,15 @@ class DashboardController extends Controller
 
     /**
      * Membuat transaksi pengiriman baru.
+     *
+     * Nama barang dan berat tidak dikirim dari form.
+     * Keduanya otomatis diambil dari data Box oleh Go Backend.
      */
     public function createShipment(Request $request): JsonResponse
     {
         $data = $request->validate([
             'box_uid' => 'required|string|max:64',
             'driver_distributor_name' => 'required|string|max:128',
-            'item_name' => 'required|string|max:128',
-            'weight_kg' => 'required|numeric|gt:0|lte:100000',
         ]);
 
         return $this->forward(

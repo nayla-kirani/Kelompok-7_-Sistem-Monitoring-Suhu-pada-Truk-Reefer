@@ -51,4 +51,16 @@ Route::prefix('dashboard')->group(function () {
     // Edit transaksi (maksimal satu kali, dibatasi backend Go)
     Route::put('shipments/{id}', [DashboardController::class, 'updateShipment'])
         ->name('dashboard.shipments.update');
+
+    
+    // Pengelolaan data box
+    Route::get('boxes', [DashboardController::class, 'listBoxes'])
+        ->name('dashboard.boxes.index');
+
+    Route::post('boxes/bulk', [DashboardController::class, 'createBoxesBulk'])
+        ->name('dashboard.boxes.bulk');
+
+    Route::put('boxes/{uid}', [DashboardController::class, 'updateBox'])
+        ->name('dashboard.boxes.update');
+
 });

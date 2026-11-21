@@ -8,9 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/gofiber/fiber/v3"
+	"gorm.io/gorm"
 )
 
 func (h *Hub) routes(app *fiber.App) {
@@ -19,14 +18,25 @@ func (h *Hub) routes(app *fiber.App) {
 	})
 
 	api := app.Group("/api", h.auth)
+
+	// Monitoring perangkat.
 	api.Get("/devices/:id/latest", h.latest)
 	api.Get("/devices/:id/history", h.history)
 	api.Get("/devices/:id/events", h.events)
 	api.Post("/devices/:id/control", h.control)
 	api.Post("/devices/:id/scan", h.scan)
+
+	// Pengelolaan barang.
 	api.Get("/items", h.listItems)
 	api.Post("/items", h.saveItem)
+
+	// Pengelolaan box.
+	api.Get("/boxes", h.listBoxes)
+	api.Post("/boxes/bulk", h.createBoxesBulk)
+	api.Put("/boxes/:uid", h.updateBox)
 	api.Get("/boxes/:uid/validate", h.validateBox)
+
+	// Transaksi pengiriman.
 	api.Get("/shipments/latest", h.getLatestShipment)
 	api.Post("/shipments", h.createShipment)
 	api.Get("/shipments/:id", h.getShipment)
@@ -46,6 +56,10 @@ func (h *Hub) auth(c fiber.Ctx) error {
 func fail(c fiber.Ctx, code int, msg string) error {
 	return c.Status(code).JSON(fiber.Map{"message": msg})
 }
+
+// ============================================================
+// MONITORING PERANGKAT
+// ============================================================
 
 type FanOut struct {
 	State   string `json:"state"`
@@ -205,7 +219,10 @@ func (h *Hub) events(c fiber.Ctx) error {
 	return c.JSON(out)
 }
 
-// ControlReq menerima perintah dari dashboard.
+// ============================================================
+// KONTROL PERANGKAT
+// ============================================================
+
 type ControlReq struct {
 	Mode    *string `json:"mode,omitempty"`
 	Fan1    *string `json:"fan1,omitempty"`
@@ -223,7 +240,6 @@ func in(v string, allowed ...string) bool {
 	return false
 }
 
-// translateCommand mengubah input dashboard menjadi perintah teks ESP32.
 func translateCommand(req ControlReq) (string, string, error) {
 	count := 0
 
@@ -343,6 +359,10 @@ func (h *Hub) control(c fiber.Ctx) error {
 	})
 }
 
+// ============================================================
+// SCAN ITEM DARI ESP32
+// ============================================================
+
 type ScanReq struct {
 	ItemUID string `json:"item_uid"`
 	BoxID   string `json:"box_id"`
@@ -380,10 +400,16 @@ func (h *Hub) scan(c fiber.Ctx) error {
 	)
 }
 
+// ============================================================
+// PENGELOLAAN ITEM
+// ============================================================
+
 func (h *Hub) listItems(c fiber.Ctx) error {
 	items := []Item{}
 
-	h.db.Order("name asc").Find(&items)
+	if err := h.db.Order("name asc").Find(&items).Error; err != nil {
+		return fail(c, fiber.StatusInternalServerError, "gagal mengambil daftar barang")
+	}
 
 	return c.JSON(items)
 }
@@ -391,8 +417,17 @@ func (h *Hub) listItems(c fiber.Ctx) error {
 func (h *Hub) saveItem(c fiber.Ctx) error {
 	var it Item
 
-	if err := c.Bind().Body(&it); err != nil || it.UID == "" || it.Name == "" {
+	if err := c.Bind().Body(&it); err != nil ||
+		strings.TrimSpace(it.UID) == "" ||
+		strings.TrimSpace(it.Name) == "" {
 		return fail(c, fiber.StatusBadRequest, "uid dan name wajib diisi")
+	}
+
+	it.UID = strings.TrimSpace(it.UID)
+	it.Name = strings.TrimSpace(it.Name)
+
+	if len(it.UID) > 64 || len(it.Name) > 128 {
+		return fail(c, fiber.StatusBadRequest, "panjang UID atau nama barang tidak valid")
 	}
 
 	if err := h.db.Save(&it).Error; err != nil {
@@ -402,7 +437,161 @@ func (h *Hub) saveItem(c fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(it)
 }
 
-// validateBox memvalidasi UID barcode sebelum transaksi dibuat.
+// ============================================================
+// PENGELOLAAN BOX
+// ============================================================
+
+type CreateBoxesBulkReq struct {
+	Boxes []BoxInput `json:"boxes"`
+}
+
+type BoxInput struct {
+	UID      string  `json:"uid"`
+	ItemName string  `json:"item_name"`
+	WeightKg float64 `json:"weight_kg"`
+}
+
+// GET /api/boxes
+func (h *Hub) listBoxes(c fiber.Ctx) error {
+	var boxes []Box
+
+	if err := h.db.Order("uid ASC").Find(&boxes).Error; err != nil {
+		return fail(c, fiber.StatusInternalServerError, "gagal mengambil daftar box")
+	}
+
+	return c.JSON(boxes)
+}
+
+// POST /api/boxes/bulk
+func (h *Hub) createBoxesBulk(c fiber.Ctx) error {
+	var req CreateBoxesBulkReq
+
+	if err := c.Bind().Body(&req); err != nil {
+		return fail(c, fiber.StatusBadRequest, "body JSON tidak valid")
+	}
+
+	if len(req.Boxes) == 0 || len(req.Boxes) > 100 {
+		return fail(c, fiber.StatusBadRequest, "jumlah box harus 1 sampai 100")
+	}
+
+	seen := make(map[string]bool)
+	boxes := make([]Box, 0, len(req.Boxes))
+
+	now := time.Now().In(jakartaLocation)
+
+	for _, input := range req.Boxes {
+		input.UID = strings.TrimSpace(input.UID)
+		input.ItemName = strings.TrimSpace(input.ItemName)
+
+		if input.UID == "" || len(input.UID) > 64 {
+			return fail(c, fiber.StatusBadRequest, "UID box wajib diisi dan maksimal 64 karakter")
+		}
+
+		if input.ItemName == "" || len(input.ItemName) > 128 {
+			return fail(c, fiber.StatusBadRequest, "nama barang wajib diisi dan maksimal 128 karakter")
+		}
+
+		if math.IsNaN(input.WeightKg) || math.IsInf(input.WeightKg, 0) ||
+			input.WeightKg <= 0 || input.WeightKg > 100000 {
+			return fail(c, fiber.StatusBadRequest, "berat harus lebih dari 0 dan maksimal 100000 kg")
+		}
+
+		if seen[input.UID] {
+			return fail(c, fiber.StatusBadRequest, "terdapat UID box yang duplikat")
+		}
+
+		seen[input.UID] = true
+
+		weight := input.WeightKg
+
+		boxes = append(boxes, Box{
+			UID:       input.UID,
+			Status:    "available",
+			ItemName:  input.ItemName,
+			WeightKg:  &weight,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		for i := range boxes {
+			if err := tx.Create(&boxes[i]).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fail(c, fiber.StatusConflict, "gagal membuat box. Pastikan UID belum terdaftar")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "daftar box berhasil dibuat",
+		"data":    boxes,
+	})
+}
+
+// PUT /api/boxes/:uid
+func (h *Hub) updateBox(c fiber.Ctx) error {
+	uid := strings.TrimSpace(c.Params("uid"))
+
+	if uid == "" || len(uid) > 64 {
+		return fail(c, fiber.StatusBadRequest, "UID box tidak valid")
+	}
+
+	var input BoxInput
+
+	if err := c.Bind().Body(&input); err != nil {
+		return fail(c, fiber.StatusBadRequest, "body JSON tidak valid")
+	}
+
+	input.ItemName = strings.TrimSpace(input.ItemName)
+
+	if input.ItemName == "" || len(input.ItemName) > 128 {
+		return fail(c, fiber.StatusBadRequest, "nama barang wajib diisi")
+	}
+
+	if math.IsNaN(input.WeightKg) || math.IsInf(input.WeightKg, 0) ||
+		input.WeightKg <= 0 || input.WeightKg > 100000 {
+		return fail(c, fiber.StatusBadRequest, "berat barang tidak valid")
+	}
+
+	var box Box
+
+	err := h.db.First(&box, "uid = ?", uid).Error
+
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fail(c, fiber.StatusNotFound, "box tidak ditemukan")
+		}
+
+		return fail(c, fiber.StatusInternalServerError, "gagal mengambil data box")
+	}
+
+	if box.Status != "available" {
+		return fail(c, fiber.StatusConflict, "data box yang sudah digunakan tidak dapat diubah")
+	}
+
+	weight := input.WeightKg
+
+	box.ItemName = input.ItemName
+	box.WeightKg = &weight
+	box.UpdatedAt = time.Now().In(jakartaLocation)
+
+	if err := h.db.Save(&box).Error; err != nil {
+		return fail(c, fiber.StatusInternalServerError, "gagal memperbarui data box")
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "data box berhasil diperbarui",
+		"data":    box,
+	})
+}
+
+// GET /api/boxes/:uid/validate
 func (h *Hub) validateBox(c fiber.Ctx) error {
 	uid := strings.TrimSpace(c.Params("uid"))
 
@@ -422,19 +611,40 @@ func (h *Hub) validateBox(c fiber.Ctx) error {
 		return fail(c, fiber.StatusInternalServerError, "gagal memeriksa UID box")
 	}
 
-	if box.Status != "available" {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"valid":   false,
-			"message": "Box sudah pernah digunakan dan tidak dapat digunakan kembali",
-			"uid":     box.UID,
-			"status":  box.Status,
+	itemName := strings.TrimSpace(box.ItemName)
+
+	// Pastikan data barang dan berat tersedia.
+	if itemName == "" || box.WeightKg == nil ||
+		*box.WeightKg <= 0 {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"valid":     false,
+			"reusable":  false,
+			"message":   "Data barang dan berat box belum dilengkapi",
+			"uid":       box.UID,
+			"status":    box.Status,
+			"item_name": itemName,
+			"weight_kg": box.WeightKg,
 		})
 	}
 
+	// Box available boleh digunakan.
+	// Box used tetap bisa menampilkan detail barang,
+	// tetapi tidak boleh digunakan untuk transaksi baru.
+	reusable := box.Status == "available"
+
+	message := "UID box valid dan dapat digunakan"
+
+	if !reusable {
+		message = "Barang ini sudah di-scan dan tidak dapat digunakan kembali"
+	}
+
 	return c.JSON(fiber.Map{
-		"valid":   true,
-		"message": "UID box valid dan dapat digunakan",
-		"uid":     box.UID,
-		"status":  box.Status,
+		"valid":     true,
+		"reusable":  reusable,
+		"message":   message,
+		"uid":       box.UID,
+		"status":    box.Status,
+		"item_name": itemName,
+		"weight_kg": *box.WeightKg,
 	})
 }

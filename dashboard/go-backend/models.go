@@ -48,10 +48,11 @@ type Item struct {
 	Name string `gorm:"size:128" json:"name"`
 }
 
-// Box menyimpan identitas dan status setiap box.
 type Box struct {
 	UID       string    `gorm:"primaryKey;size:64" json:"uid"`
 	Status    string    `gorm:"size:16;not null;default:available" json:"status"`
+	ItemName  string    `gorm:"size:128" json:"item_name"`
+	WeightKg  *float64  `json:"weight_kg"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

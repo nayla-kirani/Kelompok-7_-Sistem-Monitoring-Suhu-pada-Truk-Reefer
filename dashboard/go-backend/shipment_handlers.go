@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var jakartaLocation = func() *time.Location {
@@ -20,11 +21,15 @@ var jakartaLocation = func() *time.Location {
 	return loc
 }()
 
+var (
+	errBoxAlreadyUsed = errors.New("box sudah pernah digunakan")
+	errBoxDataInvalid = errors.New("data barang pada box belum lengkap")
+	errShipmentLocked = errors.New("transaksi sudah pernah diedit dan terkunci")
+)
+
 type CreateShipmentReq struct {
-	BoxUID                string  `json:"box_uid"`
-	DriverDistributorName string  `json:"driver_distributor_name"`
-	ItemName              string  `json:"item_name"`
-	WeightKg              float64 `json:"weight_kg"`
+	BoxUID                string `json:"box_uid"`
+	DriverDistributorName string `json:"driver_distributor_name"`
 }
 
 type UpdateShipmentReq struct {
@@ -41,6 +46,20 @@ func generateTransactionID() (string, error) {
 
 	return "TRX-" + time.Now().In(jakartaLocation).Format("20060102") +
 		"-" + strings.ToUpper(hex.EncodeToString(b)), nil
+}
+
+func validateDriverName(driver string) error {
+	driver = strings.TrimSpace(driver)
+
+	if driver == "" {
+		return errors.New("nama supir/distributor wajib diisi")
+	}
+
+	if len(driver) > 128 {
+		return errors.New("nama supir/distributor maksimal 128 karakter")
+	}
+
+	return nil
 }
 
 func validateShipmentFields(driver, item string, weight float64) error {
@@ -64,6 +83,7 @@ func validateShipmentFields(driver, item string, weight float64) error {
 }
 
 // POST /api/shipments
+// Body hanya membutuhkan box_uid dan driver_distributor_name.
 func (h *Hub) createShipment(c fiber.Ctx) error {
 	var req CreateShipmentReq
 
@@ -73,17 +93,12 @@ func (h *Hub) createShipment(c fiber.Ctx) error {
 
 	req.BoxUID = strings.TrimSpace(req.BoxUID)
 	req.DriverDistributorName = strings.TrimSpace(req.DriverDistributorName)
-	req.ItemName = strings.TrimSpace(req.ItemName)
 
 	if req.BoxUID == "" || len(req.BoxUID) > 64 {
 		return fail(c, fiber.StatusBadRequest, "UID box wajib diisi")
 	}
 
-	if err := validateShipmentFields(
-		req.DriverDistributorName,
-		req.ItemName,
-		req.WeightKg,
-	); err != nil {
+	if err := validateDriverName(req.DriverDistributorName); err != nil {
 		return fail(c, fiber.StatusUnprocessableEntity, err.Error())
 	}
 
@@ -93,28 +108,40 @@ func (h *Hub) createShipment(c fiber.Ctx) error {
 	}
 
 	now := time.Now().In(jakartaLocation)
-
 	var shipment Shipment
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		var box Box
 
-		// Mengunci baris box agar tidak dipakai dua transaksi bersamaan.
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		// Kunci baris box agar tidak dipakai dua transaksi bersamaan.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&box, "uid = ?", req.BoxUID).Error; err != nil {
 			return err
 		}
 
 		if box.Status != "available" {
-			return errors.New("box sudah pernah digunakan")
+			return errBoxAlreadyUsed
+		}
+
+		itemName := strings.TrimSpace(box.ItemName)
+
+		if itemName == "" || box.WeightKg == nil {
+			return errBoxDataInvalid
+		}
+
+		weight := *box.WeightKg
+
+		if math.IsNaN(weight) || math.IsInf(weight, 0) ||
+			weight <= 0 || weight > 100000 {
+			return errBoxDataInvalid
 		}
 
 		shipment = Shipment{
 			TransactionID:         transactionID,
 			BoxUID:                box.UID,
 			DriverDistributorName: req.DriverDistributorName,
-			ItemName:              req.ItemName,
-			WeightKg:              req.WeightKg,
+			ItemName:              itemName,
+			WeightKg:              weight,
 			CreatedAt:             now,
 			UpdatedAt:             now,
 			EditCount:             0,
@@ -135,15 +162,21 @@ func (h *Hub) createShipment(c fiber.Ctx) error {
 	})
 
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
 			return fail(c, fiber.StatusNotFound, "UID box tidak terdaftar")
-		}
 
-		if err.Error() == "box sudah pernah digunakan" {
+		case errors.Is(err, errBoxAlreadyUsed):
 			return fail(c, fiber.StatusConflict, err.Error())
-		}
 
-		return fail(c, fiber.StatusInternalServerError, "gagal menyimpan transaksi")
+		case errors.Is(err, errBoxDataInvalid):
+			return fail(c, fiber.StatusUnprocessableEntity,
+				"data barang atau berat pada box belum lengkap")
+
+		default:
+			return fail(c, fiber.StatusInternalServerError,
+				"gagal menyimpan transaksi")
+		}
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -162,7 +195,9 @@ func (h *Hub) getShipment(c fiber.Ctx) error {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fail(c, fiber.StatusNotFound, "transaksi tidak ditemukan")
 		}
-		return fail(c, fiber.StatusInternalServerError, "gagal mengambil transaksi")
+
+		return fail(c, fiber.StatusInternalServerError,
+			"gagal mengambil transaksi")
 	}
 
 	return c.JSON(fiber.Map{
@@ -171,6 +206,7 @@ func (h *Hub) getShipment(c fiber.Ctx) error {
 }
 
 // PUT /api/shipments/:id
+// Pengeditan transaksi tetap dibatasi satu kali.
 func (h *Hub) updateShipment(c fiber.Ctx) error {
 	id := strings.TrimSpace(c.Params("id"))
 
@@ -196,13 +232,13 @@ func (h *Hub) updateShipment(c fiber.Ctx) error {
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var shipment Shipment
 
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			First(&shipment, "transaction_id = ?", id).Error; err != nil {
 			return err
 		}
 
 		if shipment.EditCount >= 1 {
-			return errors.New("transaksi sudah pernah diedit dan terkunci")
+			return errShipmentLocked
 		}
 
 		shipment.DriverDistributorName = req.DriverDistributorName
@@ -223,15 +259,17 @@ func (h *Hub) updateShipment(c fiber.Ctx) error {
 	})
 
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
 			return fail(c, fiber.StatusNotFound, "transaksi tidak ditemukan")
-		}
 
-		if err.Error() == "transaksi sudah pernah diedit dan terkunci" {
+		case errors.Is(err, errShipmentLocked):
 			return fail(c, fiber.StatusConflict, err.Error())
-		}
 
-		return fail(c, fiber.StatusInternalServerError, "gagal memperbarui transaksi")
+		default:
+			return fail(c, fiber.StatusInternalServerError,
+				"gagal memperbarui transaksi")
+		}
 	}
 
 	return c.JSON(fiber.Map{
@@ -255,11 +293,8 @@ func (h *Hub) getLatestShipment(c fiber.Ctx) error {
 			})
 		}
 
-		return fail(
-			c,
-			fiber.StatusInternalServerError,
-			"gagal mengambil transaksi terakhir",
-		)
+		return fail(c, fiber.StatusInternalServerError,
+			"gagal mengambil transaksi terakhir")
 	}
 
 	return c.JSON(fiber.Map{

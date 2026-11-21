@@ -1620,6 +1620,7 @@
 
 <!-- DIALOG SCAN DAN FORM -->
 <dialog id="scanDlg" aria-labelledby="scanTitle">
+    
 
     <div id="stepScan">
         <h2 id="scanTitle" style="font-size:18px;margin-bottom:12px">
@@ -1825,6 +1826,7 @@
     let currentShipment = null;
     let shipmentMode = 'create';
     let validatedBoxUid = '';
+    let boxAlreadyUsed = false;
 
     const jsonHeaders = {
         'Content-Type': 'application/json',
@@ -2338,8 +2340,12 @@
 
             await stopScanner();
 
+            const detail = error && error.message
+                ? ' (' + error.message + ')'
+                : '';
+
             $('#camMsg').textContent =
-                'Scanner gagal dimulai. Periksa izin kamera atau gunakan input UID manual.';
+                'Scanner gagal dimulai' + detail + '. Periksa izin kamera atau gunakan input UID manual.';
         }
     }
 
@@ -2360,23 +2366,35 @@
     function openScan() {
         shipmentMode = 'create';
         validatedBoxUid = '';
+        boxAlreadyUsed = false;
+        $('#saveShipment').disabled = false;
+        $('#saveShipment').textContent = 'Simpan transaksi';
 
         $('#formTitle').textContent = 'Data pengiriman';
-
         $('#formDescription').textContent =
-            'Lengkapi informasi pengiriman untuk box yang sudah divalidasi.';
+            'Nama barang dan berat otomatis diambil dari data registrasi box.';
 
         $('#formBox').value = '';
         $('#formDriver').value = '';
         $('#formItem').value = '';
         $('#formWeight').value = '';
 
+        // Saat membuat transaksi, barang dan berat hanya dibaca dari database.
+        $('#formItem').readOnly = true;
+        $('#formWeight').readOnly = true;
+
         $('#saveShipment').textContent = 'Simpan transaksi';
 
         showScanStep();
-        dialog.showModal();
 
-        startScanner();
+        if (!dialog.open) {
+            dialog.showModal();
+        }
+
+        // Tunggu dialog tampil sebelum library memasang elemen video.
+        requestAnimationFrame(() => {
+            startScanner();
+        });
     }
 
     async function closeDialog() {
@@ -2406,6 +2424,7 @@
         }
     }
 
+    
     async function validateBox(uid) {
         uid = String(uid || '').trim();
 
@@ -2415,9 +2434,12 @@
         }
 
         const manualButton = $('#manualGo');
-
         manualButton.disabled = true;
         $('#camMsg').textContent = 'Memeriksa UID Box...';
+
+        // Reset hasil pemeriksaan sebelumnya.
+        validatedBoxUid = '';
+        boxAlreadyUsed = false;
 
         try {
             const url = U.validateBox.replace(
@@ -2433,26 +2455,67 @@
                 );
             }
 
-            if (result.status !== 'available') {
-                throw new Error('Box sudah pernah digunakan.');
+            const itemName = String(result.item_name || '').trim();
+            const weightKg = Number(result.weight_kg);
+
+            if (!itemName) {
+                throw new Error('Nama barang belum terdaftar pada box.');
             }
 
+            if (!Number.isFinite(weightKg) || weightKg <= 0) {
+                throw new Error('Berat barang belum terdaftar dengan benar.');
+            }
+
+            // Box used tetap menampilkan detail, tetapi tidak bisa dipakai
+            // untuk membuat transaksi baru.
+            boxAlreadyUsed = result.status !== 'available';
             validatedBoxUid = result.uid || uid;
 
             await stopScanner();
 
             $('#formBox').value = validatedBoxUid;
+            $('#formItem').value = itemName;
+            $('#formWeight').value = weightKg;
+
+            // Data barang berasal dari database.
+            $('#formItem').readOnly = true;
+            $('#formWeight').readOnly = true;
+
             $('#camMsg').textContent = '';
 
-            showFormStep();
+            if (boxAlreadyUsed) {
+                $('#formTitle').textContent = 'Detail Box';
+                $('#formDescription').textContent =
+                    'Box ini sudah pernah digunakan. Detail barang tetap dapat dilihat.';
 
-            toast('UID Box valid dan tersedia');
+                $('#formMsg').textContent =
+                    'Barang ini sudah di-scan. Transaksi baru tidak dapat dibuat menggunakan box ini.';
 
-            $('#formDriver').focus();
+                $('#saveShipment').disabled = true;
+                $('#saveShipment').textContent = 'Box sudah digunakan';
+
+                showFormStep();
+                toast('Barang ini sudah di-scan', true);
+            } else {
+                $('#formTitle').textContent = 'Data pengiriman';
+                $('#formDescription').textContent =
+                    'Nama barang dan berat otomatis diambil dari data registrasi box.';
+
+                $('#formMsg').textContent = '';
+                $('#saveShipment').disabled = false;
+                $('#saveShipment').textContent = 'Simpan transaksi';
+
+                showFormStep();
+                toast('UID Box valid dan data barang berhasil dimuat');
+                $('#formDriver').focus();
+            }
 
             return true;
 
         } catch (error) {
+            validatedBoxUid = '';
+            boxAlreadyUsed = false;
+
             $('#camMsg').textContent = error.message;
             toast(error.message, true);
 
@@ -2469,10 +2532,15 @@
 
     async function saveShipment() {
         const driver = $('#formDriver').value.trim();
-        const item = $('#formItem').value.trim();
-        const weight = Number($('#formWeight').value);
 
-        if (!validatedBoxUid && shipmentMode === 'create') {
+        // Pengaman frontend; backend tetap wajib memeriksa status box.
+        if (shipmentMode === 'create' && boxAlreadyUsed) {
+            $('#formMsg').textContent =
+                'Barang ini sudah di-scan. Transaksi baru tidak dapat dibuat.';
+            return;
+        }
+
+        if (shipmentMode === 'create' && !validatedBoxUid) {
             $('#formMsg').textContent = 'UID Box belum divalidasi.';
             return;
         }
@@ -2484,30 +2552,37 @@
             return;
         }
 
-        if (!item) {
-            $('#formMsg').textContent = 'Nama barang wajib diisi.';
-            $('#formItem').focus();
-            return;
-        }
-
-        if (!Number.isFinite(weight) || weight <= 0 || weight > 100000) {
-            $('#formMsg').textContent =
-                'Berat barang harus lebih dari 0 kg.';
-            $('#formWeight').focus();
-            return;
-        }
-
-        const payload = {
-            driver_distributor_name: driver,
-            item_name: item,
-            weight_kg: weight
+        // Data barang hanya perlu divalidasi saat mengedit transaksi lama.
+        let payload = {
+            driver_distributor_name: driver
         };
 
         if (shipmentMode === 'create') {
+            // Backend mengambil nama barang dan berat dari tabel boxes.
             payload.box_uid = validatedBoxUid;
+        } else {
+            const item = $('#formItem').value.trim();
+            const weight = Number($('#formWeight').value);
+
+            if (!item) {
+                $('#formMsg').textContent = 'Nama barang wajib diisi.';
+                $('#formItem').focus();
+                return;
+            }
+
+            if (!Number.isFinite(weight) || weight <= 0 || weight > 100000) {
+                $('#formMsg').textContent =
+                    'Berat barang harus lebih dari 0 kg.';
+                $('#formWeight').focus();
+                return;
+            }
+
+            payload.item_name = item;
+            payload.weight_kg = weight;
         }
 
         const button = $('#saveShipment');
+        const modeSaatSimpan = shipmentMode;
 
         button.disabled = true;
         button.textContent = 'Menyimpan...';
@@ -2516,7 +2591,7 @@
         try {
             let response;
 
-            if (shipmentMode === 'create') {
+            if (modeSaatSimpan === 'create') {
                 response = await requestJson(U.storeShipment, {
                     method: 'POST',
                     headers: jsonHeaders,
@@ -2540,7 +2615,7 @@
             }
 
             toast(
-                shipmentMode === 'create'
+                modeSaatSimpan === 'create'
                     ? 'Transaksi berhasil disimpan'
                     : 'Transaksi berhasil diperbarui'
             );
@@ -2558,8 +2633,7 @@
 
         } finally {
             button.disabled = false;
-
-            button.textContent = shipmentMode === 'create'
+            button.textContent = modeSaatSimpan === 'create'
                 ? 'Simpan transaksi'
                 : 'Simpan perubahan';
         }
@@ -2584,6 +2658,9 @@
 
         await stopScanner();
 
+        boxAlreadyUsed = false;
+        $('#saveShipment').disabled = false;
+
         $('#formTitle').textContent = 'Edit transaksi pengiriman';
 
         $('#formDescription').textContent =
@@ -2599,6 +2676,10 @@
 
         $('#formWeight').value =
             currentShipment.weight_kg || '';
+
+        // Mode edit mengizinkan perubahan snapshot barang sesuai aturan edit satu kali.
+        $('#formItem').readOnly = false;
+        $('#formWeight').readOnly = false;
 
         $('#saveShipment').textContent = 'Simpan perubahan';
         $('#formMsg').textContent = '';
@@ -2628,7 +2709,7 @@
         const valid = await validateBox(uid);
 
         if (!valid && dialog.open && !$('#stepScan').hidden) {
-            startScanner();
+            requestAnimationFrame(() => startScanner());
         }
     });
 
@@ -2646,9 +2727,13 @@
         }
 
         validatedBoxUid = '';
+        $('#formBox').value = '';
+        $('#formDriver').value = '';
+        $('#formItem').value = '';
+        $('#formWeight').value = '';
 
         showScanStep();
-        startScanner();
+        requestAnimationFrame(() => startScanner());
     });
 
     $('#saveShipment').addEventListener('click', saveShipment);
@@ -2658,7 +2743,12 @@
     $('#formDriver').addEventListener('keydown', event => {
         if (event.key === 'Enter') {
             event.preventDefault();
-            $('#formItem').focus();
+
+            if (shipmentMode === 'create') {
+                saveShipment();
+            } else {
+                $('#formItem').focus();
+            }
         }
     });
 
