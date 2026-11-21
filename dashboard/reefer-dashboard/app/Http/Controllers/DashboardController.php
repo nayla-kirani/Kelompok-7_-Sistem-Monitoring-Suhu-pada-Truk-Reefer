@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\ConnectionException; 
 use Illuminate\Support\Facades\Http;
 
 class DashboardController extends Controller

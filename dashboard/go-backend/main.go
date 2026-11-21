@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load() // baca file .env kalau ada
+	_ = godotenv.Load() // baca file .env
 	cfg := loadConfig()
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
@@ -20,7 +20,7 @@ func main() {
 	if err != nil {
 		log.Fatal("gagal konek MySQL: ", err)
 	}
-	if err := db.AutoMigrate(&DeviceState{}, &Reading{}, &Event{}, &Item{}); err != nil {
+	if err := db.AutoMigrate(&DeviceState{}, &Reading{}, &Event{}, &Item{}, &Shipment{}); err != nil {
 		log.Fatal("gagal migrasi tabel: ", err)
 	}
 
