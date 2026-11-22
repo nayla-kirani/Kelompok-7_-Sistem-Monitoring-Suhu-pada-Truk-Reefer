@@ -244,6 +244,17 @@ class DashboardController extends Controller
     }
 
     /**
+     * Mengambil seluruh riwayat transaksi pengiriman.
+     */
+    public function listShipments(): JsonResponse
+    {
+        return $this->forward(
+            'GET',
+            '/api/shipments'
+        );
+    }
+
+    /**
      * Mengambil detail transaksi berdasarkan ID.
      */
     public function getShipment(string $id): JsonResponse

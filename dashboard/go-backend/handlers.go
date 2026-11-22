@@ -36,10 +36,19 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Put("/boxes/:uid", h.updateBox)
 	api.Get("/boxes/:uid/validate", h.validateBox)
 
-	// Transaksi pengiriman.
+	// Riwayat transaksi pengiriman
+	api.Get("/shipments", h.listShipments)
+
+	// Transaksi terakhir
 	api.Get("/shipments/latest", h.getLatestShipment)
+
+	// Buat transaksi
 	api.Post("/shipments", h.createShipment)
+
+	// Detail transaksi
 	api.Get("/shipments/:id", h.getShipment)
+
+	// Edit transaksi
 	api.Put("/shipments/:id", h.updateShipment)
 }
 

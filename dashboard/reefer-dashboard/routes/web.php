@@ -39,6 +39,10 @@ Route::prefix('dashboard')->group(function () {
     Route::post('shipments', [DashboardController::class, 'createShipment'])
         ->name('dashboard.shipments.store');
 
+    // Riwayat seluruh transaksi pengiriman
+    Route::get('shipments', [DashboardController::class, 'listShipments'])
+        ->name('dashboard.shipments.index');
+
     // Ambil transaksi terakhir
     // Harus berada sebelum route shipments/{id}
     Route::get('shipments/latest', [DashboardController::class, 'latestShipment'])

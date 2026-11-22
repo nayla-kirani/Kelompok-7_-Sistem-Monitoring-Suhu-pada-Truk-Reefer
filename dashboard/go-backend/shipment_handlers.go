@@ -301,3 +301,25 @@ func (h *Hub) getLatestShipment(c fiber.Ctx) error {
 		"data": shipment,
 	})
 }
+
+// GET /api/shipments
+// Mengambil seluruh riwayat transaksi pengiriman.
+func (h *Hub) listShipments(c fiber.Ctx) error {
+	var shipments []Shipment
+
+	if err := h.db.
+		Order("created_at DESC").
+		Find(&shipments).Error; err != nil {
+
+		return fail(
+			c,
+			fiber.StatusInternalServerError,
+			"gagal mengambil riwayat transaksi",
+		)
+	}
+
+	return c.JSON(fiber.Map{
+		"data":  shipments,
+		"total": len(shipments),
+	})
+}

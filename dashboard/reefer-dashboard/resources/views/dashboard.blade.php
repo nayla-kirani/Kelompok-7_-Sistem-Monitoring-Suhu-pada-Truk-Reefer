@@ -1314,10 +1314,137 @@
 
         html { scroll-behavior: auto; }
     }
+
+
+      /* ==========================================
+        RIWAYAT TRANSAKSI PENGIRIMAN
+      ========================================== */
+
+      .history-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          margin-bottom: 24px;
+      }
+
+      .history-eyebrow {
+          display: inline-block;
+          color: var(--cold);
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 1.5px;
+          margin-bottom: 8px;
+      }
+
+      .history-header h1 {
+          color: var(--ink);
+          font-size: clamp(24px, 3vw, 32px);
+          font-weight: 800;
+          margin: 0 0 8px;
+      }
+
+      .history-header .sub {
+          margin: 0;
+      }
+
+      .history-panel {
+          padding: 22px;
+          min-width: 0;
+      }
+
+      .history-toolbar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 18px;
+      }
+
+      .history-toolbar h2 {
+          margin: 0 0 5px;
+          color: var(--ink);
+          font-size: 18px;
+      }
+
+      .history-toolbar .sub {
+          margin: 0;
+      }
+
+      .history-table-wrap {
+          width: 100%;
+          overflow-x: auto;
+      }
+
+      .history-table {
+          width: 100%;
+          border-collapse: collapse;
+          min-width: 1050px;
+          font-size: 13px;
+      }
+
+      .history-table th {
+          padding: 14px 12px;
+          text-align: left;
+          color: var(--mute);
+          background: var(--frost);
+          font-weight: 700;
+          white-space: nowrap;
+          border-bottom: 1px solid var(--line);
+      }
+
+      .history-table td {
+          padding: 14px 12px;
+          color: var(--ink);
+          border-bottom: 1px solid var(--line);
+          vertical-align: middle;
+      }
+
+      .history-table tbody tr:hover {
+          background: var(--frost);
+      }
+
+      .history-status {
+          display: inline-block;
+          padding: 5px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          white-space: nowrap;
+      }
+
+      .history-status.new {
+          color: #167447;
+          background: #e7f7ee;
+      }
+
+      .history-status.edited {
+          color: #946200;
+          background: #fff4d6;
+      }
+
+      .history-empty {
+          text-align: center;
+          padding: 35px !important;
+          color: var(--mute) !important;
+      }
+
+      @media (max-width: 700px) {
+          .history-header {
+              align-items: flex-start;
+              flex-direction: column;
+          }
+
+          .history-panel {
+              padding: 14px;
+          }
+      }
+
     </style>
 </head>
 
 <body>
+
+
 
 <!-- SIDEBAR -->
 <aside class="sidebar" id="sidebar">
@@ -1347,6 +1474,11 @@
         <button type="button" class="side-link" data-page="monitoring">
             <span class="side-icon">▦</span>
             <span class="side-text">Monitoring & Kontrol</span>
+        </button>
+
+        <button type="button" class="side-link" data-page="shipments">
+            <span class="side-icon">▤</span>
+            <span class="side-text">Riwayat Transaksi Pengiriman</span>
         </button>
     </nav>
 
@@ -1616,6 +1748,65 @@
             </div>
         </div>
     </section>
+
+    <!-- =================================
+         HALAMAN RIWAYAT TRANSAKSI
+    ================================== -->
+    <section class="page dashboard-page" id="shipmentHistoryPage" hidden>
+
+        <div class="wrap">
+
+            <div class="history-header">
+                <div>
+                    <span class="history-eyebrow">DATA PENGIRIMAN</span>
+                    <h1>Riwayat Transaksi Pengiriman</h1>
+                    <p class="sub">
+                        Daftar seluruh transaksi pengiriman yang tersimpan di sistem.
+                    </p>
+                </div>
+
+                <button type="button" class="btn" id="refreshShipmentHistory">
+                    ↻ Muat Ulang
+                </button>
+            </div>
+
+            <div class="panel history-panel">
+                <div class="history-toolbar">
+                    <div>
+                        <h2>Seluruh Transaksi</h2>
+                        <p class="sub" id="shipmentHistoryCount">
+                            Memuat data transaksi...
+                        </p>
+                    </div>
+                </div>
+
+                <div class="history-table-wrap">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>No.</th>
+                                <th>ID Transaksi</th>
+                                <th>UID Box</th>
+                                <th>Nama Barang</th>
+                                <th>Berat (Kg)</th>
+                                <th>Driver / Distributor</th>
+                                <th>Tanggal Transaksi</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="shipmentHistoryBody">
+                            <tr>
+                                <td colspan="8" class="history-empty">
+                                    Memuat data transaksi...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </section>
 </div>
 
 <!-- DIALOG SCAN DAN FORM -->
@@ -1724,12 +1915,16 @@
     const pageButtons = document.querySelectorAll('[data-page]');
     const landingPage = $('#landingPage');
     const dashboardPage = $('#dashboardPage');
+    const shipmentHistoryPage = $('#shipmentHistoryPage');
 
     function showPage(page) {
+        const isLanding = page === 'landing';
         const isMonitoring = page === 'monitoring';
+        const isShipments = page === 'shipments';
 
-        landingPage.hidden = isMonitoring;
+        landingPage.hidden = !isLanding;
         dashboardPage.hidden = !isMonitoring;
+        shipmentHistoryPage.hidden = !isShipments;
 
         pageButtons.forEach(button => {
             button.classList.toggle(
@@ -1752,6 +1947,10 @@
             loadHistory();
             loadEvents();
             loadLatestShipment();
+        }
+
+        if (isShipments) {
+            loadShipmentHistory();
         }
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1803,6 +2002,7 @@
         validateBox: @json(route('dashboard.boxes.validate', ['uid' => '__UID__'])),
         storeShipment: @json(route('dashboard.shipments.store')),
         latestShipment: @json(route('dashboard.shipments.latest')),
+        shipmentHistory: @json(route('dashboard.shipments.index')),
         updateShipment: @json(route('dashboard.shipments.update', ['id' => '__ID__']))
     };
 
@@ -2250,6 +2450,101 @@
             console.error('Gagal memuat transaksi:', error);
         }
     }
+
+    // ==========================================
+    // RIWAYAT TRANSAKSI PENGIRIMAN
+    // ==========================================
+
+    function escapeHistoryHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        })[character]);
+    }
+
+    async function loadShipmentHistory() {
+        const body = $('#shipmentHistoryBody');
+        const count = $('#shipmentHistoryCount');
+
+        if (!body || !count) return;
+
+        body.innerHTML = `
+            <tr>
+                <td colspan="8" class="history-empty">
+                    Memuat data transaksi...
+                </td>
+            </tr>
+        `;
+
+        count.textContent = 'Sedang mengambil data dari database...';
+
+        try {
+            const response = await getJson(U.shipmentHistory);
+            const shipments = Array.isArray(response.data)
+                ? response.data
+                : [];
+
+            count.textContent =
+                `${Number(response.total ?? shipments.length).toLocaleString('id-ID')} transaksi tersimpan`;
+
+            if (!shipments.length) {
+                body.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="history-empty">
+                            Belum ada transaksi pengiriman yang tersimpan.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            shipments.sort((a, b) =>
+                new Date(b.created_at || 0) - new Date(a.created_at || 0)
+            );
+
+            body.innerHTML = shipments.map((item, index) => {
+                const edited = Number(item.edit_count || 0) > 0;
+                const weight = Number(item.weight_kg);
+
+                return `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td>${escapeHistoryHtml(item.transaction_id || '-')}</td>
+                        <td>${escapeHistoryHtml(item.box_uid || '-')}</td>
+                        <td>${escapeHistoryHtml(item.item_name || '-')}</td>
+                        <td>${Number.isFinite(weight) ? weight.toLocaleString('id-ID') : '-'}</td>
+                        <td>${escapeHistoryHtml(item.driver_distributor_name || '-')}</td>
+                        <td>${escapeHistoryHtml(dateTime(item.created_at))}</td>
+                        <td>
+                            <span class="history-status ${edited ? 'edited' : 'new'}">
+                                ${edited ? 'Sudah Diedit' : 'Baru'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+        } catch (error) {
+            console.error('Gagal memuat riwayat transaksi:', error);
+            count.textContent = 'Riwayat transaksi gagal dimuat.';
+
+            body.innerHTML = `
+                <tr>
+                    <td colspan="8" class="history-empty">
+                        ${escapeHistoryHtml(error.message || 'Terjadi kesalahan saat mengambil data.')}
+                    </td>
+                </tr>
+            `;
+        }
+    }
+
+    $('#refreshShipmentHistory').addEventListener(
+        'click',
+        loadShipmentHistory
+    );
 
     // ==========================================
     // SCANNER BARCODE
