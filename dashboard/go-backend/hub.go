@@ -29,18 +29,17 @@ type Telemetry struct {
 	Buzzer   string  `json:"buzzer"`
 	Muted    string  `json:"muted"`
 	Offset   float64 `json:"offset"`
-	Setpoint float64 `json:"setpoint"`
-	SafeMax  float64 `json:"safe_max"`
+	Setpoint *float64 `json:"setpoint"`
+	SafeMin  *float64 `json:"safe_min"`
+	SafeMax  *float64 `json:"safe_max"`
+	WarnMax  *float64 `json:"warn_max"`
 
+	// Kipas A (pendingin es): "ON" / "OFF".
 	FanCool string `json:"fan_cool"`
-	FanStab int    `json:"fan_stab"`
-
-	FanAOn      bool   `json:"fan_a_on"`
-	FanBOn      bool   `json:"fan_b_on"`
-	FanAPercent int    `json:"fan_a_percent"`
-	FanBPercent int    `json:"fan_b_percent"`
-	FanAMode    string `json:"fan_a_mode"`
-	FanBMode    string `json:"fan_b_mode"`
+	// Kipas B (penjaga suhu / stabilisasi): kecepatan dalam persen (0..100),
+	// dihitung ESP32 dari duty PWM, sama dengan yang tampil di Serial Monitor.
+	FanStab     int `json:"fan_stab"`
+	FanStabDuty int `json:"fan_stab_duty"`
 
 	Mode      string  `json:"mode"`
 	PID       string  `json:"pid"`
@@ -65,11 +64,8 @@ var statusLabel = map[string]string{
 }
 
 func fan1Text(s string) string {
-	switch s {
-	case "normal":
+	if s == "on" {
 		return "menyala"
-	case "high":
-		return "menyala, kecepatan tinggi"
 	}
 	return "mati"
 }
@@ -90,31 +86,82 @@ func clean(s string, allowed ...string) string {
 	return allowed[0]
 }
 
-func classify(prev string, t float64, cfg Config) string {
-	switch {
-	case t > cfg.CritAt:
-		return "critical"
-	case t >= cfg.WarnAt:
-		if prev == "critical" && t > cfg.CritAt-cfg.Hysteresis {
-			return "critical"
-		}
+// Nilai awal zona suhu, sama dengan AMAN_MIN, AMAN_MAX, dan WARN_MAX di firmware.
+// Setelah telemetry pertama masuk, nilai ini diganti dengan yang dikirim ESP32.
+func (h *Hub) defaultThresholds() (float64, float64, float64) {
+	return 17.0, 20.0, 23.0
+}
+
+// Status dari ESP32 (GREEN/YELLOW/RED/SENSOR_ERROR) diubah ke istilah dashboard,
+// sehingga dashboard selalu sama dengan LED di perangkat.
+func statusFromDevice(s string) string {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "GREEN":
+		return "normal"
+	case "YELLOW":
 		return "warning"
-	default:
-		if (prev == "warning" || prev == "critical") &&
-			t >= cfg.WarnAt-cfg.Hysteresis {
+	case "RED", "SENSOR_ERROR":
+		return "critical"
+	}
+	return ""
+}
+
+// Klasifikasi suhu berdasarkan ambang batas yang tersimpan.
+func classify(
+	prev string,
+	t float64,
+	safeMin float64,
+	safeMax float64,
+	warnMax float64,
+	hysteresis float64,
+) string {
+	// Hysteresis untuk mengurangi perubahan status yang terlalu cepat.
+	if hysteresis < 0 {
+		hysteresis = 0
+	}
+
+	if prev == "critical" && t > warnMax-hysteresis {
+		return "critical"
+	}
+
+	if prev == "warning" {
+		if t < safeMin+hysteresis ||
+			(t > safeMax-hysteresis && t <= warnMax) {
 			return "warning"
 		}
+	}
+
+	switch {
+	case t < safeMin:
+		return "warning"
+	case t <= safeMax:
 		return "normal"
+	case t <= warnMax:
+		return "warning"
+	default:
+		return "critical"
 	}
 }
 
 func (h *Hub) loadState(id string) (st DeviceState, existed bool) {
-	existed = h.db.Where("device_id = ?", id).
+	result := h.db.Where("device_id = ?", id).
 		Limit(1).
-		Find(&st).RowsAffected > 0
+		Find(&st)
+
+	existed = result.RowsAffected > 0
 
 	if !existed {
 		st.DeviceID = id
+		st.SafeMin, st.SafeMax, st.WarnMax = h.defaultThresholds()
+	} else {
+		// Menangani data lama yang belum memiliki nilai ambang batas.
+		defaultMin, defaultMax, defaultWarn := h.defaultThresholds()
+
+		if st.SafeMin == 0 && st.SafeMax == 0 && st.WarnMax == 0 {
+			st.SafeMin = defaultMin
+			st.SafeMax = defaultMax
+			st.WarnMax = defaultWarn
+		}
 	}
 
 	return
@@ -128,7 +175,12 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 		return
 	}
 
-	if in.Temperature == nil {
+	// Saat sensor error, ESP32 mengirim "temp": null dan status "SENSOR_ERROR".
+	// Data seperti ini tetap diproses agar dashboard tahu sensornya bermasalah.
+	sensorError := in.Temperature == nil ||
+		strings.EqualFold(strings.TrimSpace(in.Status), "SENSOR_ERROR")
+
+	if in.Temperature == nil && !sensorError {
 		log.Printf("telemetry %s tidak memiliki data suhu: %s", id, b)
 		return
 	}
@@ -136,21 +188,45 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	st, existed := h.loadState(id)
+	st, _ := h.loadState(id)
 
 	now := time.Now().UTC()
-	t := *in.Temperature
 
-	status := classify(st.Status, t, h.cfg)
+	// Saat sensor error, suhu terakhir yang valid dipertahankan (tidak masuk grafik).
+	t := st.Temperature
+	if in.Temperature != nil {
+		t = *in.Temperature
+	}
 
-	// Mode dari ESP32: OFF, FAILSAFE, COOLING, HOLD, atau IDLE.
+	// Zona suhu yang dipakai ESP32 ikut disimpan agar tampilan bar suhu sama.
+	if in.SafeMin != nil && in.SafeMax != nil && in.WarnMax != nil &&
+		*in.SafeMin < *in.SafeMax && *in.SafeMax < *in.WarnMax {
+		st.SafeMin = *in.SafeMin
+		st.SafeMax = *in.SafeMax
+		st.WarnMax = *in.WarnMax
+	}
+
+	// Status memakai hasil ESP32. Kalau tidak ada, hitung sendiri sebagai cadangan.
+	status := statusFromDevice(in.Status)
+	if status == "" {
+		status = classify(
+			st.Status,
+			t,
+			st.SafeMin,
+			st.SafeMax,
+			st.WarnMax,
+			h.cfg.Hysteresis,
+		)
+	}
+
 	mode := strings.ToUpper(strings.TrimSpace(in.Mode))
 	if mode == "" {
 		mode = "UNKNOWN"
 	}
 
-	// Fan A = kipas pendingin.
-	fan1Percent := in.FanAPercent
+	// Kipas 1 di dashboard = penjaga suhu = Kipas B (stabilisasi) di ESP32.
+	// ESP32 mengirim kecepatannya dalam persen lewat field "fan_stab".
+	fan1Percent := in.FanStab
 	if fan1Percent < 0 {
 		fan1Percent = 0
 	}
@@ -160,20 +236,15 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 
 	f1 := "off"
 	if fan1Percent > 0 {
-		f1 = "normal"
+		f1 = "on"
 	}
 
-	// Fan B = kipas penjaga suhu.
-	fan2Percent := in.FanBPercent
-	if fan2Percent < 0 {
-		fan2Percent = 0
-	}
-	if fan2Percent > 100 {
-		fan2Percent = 100
-	}
-
+	// Kipas 2 di dashboard = pendingin es = Kipas A (pendingin) di ESP32.
+	// Hanya ON/OFF lewat field "fan_cool".
+	fan2Percent := 0
 	f2 := "off"
-	if fan2Percent > 0 {
+	if strings.EqualFold(strings.TrimSpace(in.FanCool), "ON") {
+		fan2Percent = 100
 		f2 = "on"
 	}
 
@@ -188,30 +259,38 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 		})
 	}
 
-	if existed {
-		if !st.Online {
-			add("info", "Perangkat kembali online")
-		}
+	if st.Online == false && !st.LastSeen.IsZero() {
+		add("info", "Perangkat kembali online")
+	}
 
-		if status != st.Status {
-			add("info", fmt.Sprintf(
-				"Kondisi %s, suhu %.1f°C",
-				statusLabel[status], t,
-			))
+	if sensorError != st.SensorError && st.LastSeen.IsZero() == false {
+		if sensorError {
+			add("critical", "Sensor suhu error, alarm aktif")
+		} else {
+			add("info", "Sensor suhu kembali normal")
 		}
+	}
 
-		if f1 != st.Fan1State {
-			add("info", "Kipas 1 "+fan1Text(f1))
-		}
+	if status != st.Status && st.Status != "" && !sensorError {
+		add("info", fmt.Sprintf(
+			"Kondisi %s, suhu %.1f°C",
+			statusLabel[status], t,
+		))
+	}
 
-		if f2 != st.Fan2State {
-			add("info", "Kipas 2 "+fan2Text(f2))
-		}
+	if f1 != st.Fan1State && st.Fan1State != "" {
+		add("info", "Kipas 1 "+fan1Text(f1))
+	}
 
-		if mode != st.Mode {
-			add("info", "Mode berubah ke "+mode)
-		}
-	} else {
+	if f2 != st.Fan2State && st.Fan2State != "" {
+		add("info", "Kipas 2 "+fan2Text(f2))
+	}
+
+	if mode != st.Mode && st.Mode != "" {
+		add("info", "Mode berubah ke "+mode)
+	}
+
+	if st.LastSeen.IsZero() {
 		add("info", "Perangkat pertama kali terhubung")
 	}
 
@@ -225,16 +304,25 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 	}
 
 	st.Temperature = t
+	st.SensorError = sensorError
+	st.Muted = strings.EqualFold(strings.TrimSpace(in.Muted), "YES")
+	// Mute/unmute hanya berlaku untuk dua kondisi: Kritis dan sensor error.
+	// Sensor error otomatis berstatus "critical", jadi cukup periksa status.
+	st.Alarm = status == "critical" || sensorError
 	st.Status = status
 	st.Mode = mode
+	st.Cooler = strings.ToUpper(strings.TrimSpace(in.Cooler))
 
-	// Fan A = pendingin.
+	if in.Setpoint != nil {
+		sp := *in.Setpoint
+		st.Setpoint = &sp
+	}
+
 	st.Fan1State = f1
 	st.Fan1RPM = nil
 	st.Fan1Fault = false
 	st.Fan1Percent = fan1Percent
 
-	// Fan B = penjaga suhu.
 	st.Fan2State = f2
 	st.Fan2RPM = nil
 	st.Fan2Fault = false
@@ -249,13 +337,15 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 		return
 	}
 
-	if err := h.db.Create(&Reading{
-		DeviceID:    id,
-		Temperature: t,
-		Status:      status,
-		CreatedAt:   now,
-	}).Error; err != nil {
-		log.Println("Gagal menyimpan reading:", err)
+	if !sensorError {
+		if err := h.db.Create(&Reading{
+			DeviceID:    id,
+			Temperature: t,
+			Status:      status,
+			CreatedAt:   now,
+		}).Error; err != nil {
+			log.Println("Gagal menyimpan reading:", err)
+		}
 	}
 
 	if len(evs) > 0 {
@@ -265,12 +355,12 @@ func (h *Hub) onTelemetry(id string, b []byte) {
 	}
 
 	log.Printf(
-		"Telemetry diterima | suhu: %.1f°C | kelembapan: %v | mode: %s | fan cooling: %s | fan stabilisasi: %d%%",
+		"Telemetry diterima | suhu: %.1f°C | kelembapan: %v | mode: %s | kipas pendingin: %s | kipas penjaga suhu: %d%%",
 		t,
 		in.Humidity,
 		mode,
 		in.FanCool,
-		in.FanStab,
+		fan1Percent,
 	)
 }
 

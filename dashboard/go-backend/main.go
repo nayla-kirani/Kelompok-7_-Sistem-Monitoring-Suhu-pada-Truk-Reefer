@@ -11,18 +11,24 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load() // baca file .env kalau ada
+	_ = godotenv.Load()
 	cfg := loadConfig()
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
-		cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
+	dsn := fmt.Sprintf(
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
+		cfg.DBUser,
+		cfg.DBPass,
+		cfg.DBHost,
+		cfg.DBPort,
+		cfg.DBName,
+	)
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatal("gagal konek MySQL: ", err)
 	}
 
-	// Membuat atau memperbarui tabel database.
+	// Migrasi tabel database.
 	if err := db.AutoMigrate(
 		&DeviceState{},
 		&Reading{},
@@ -36,7 +42,11 @@ func main() {
 
 	log.Println("Migrasi database berhasil")
 
-	hub := &Hub{db: db, cfg: cfg}
+	hub := &Hub{
+		db:  db,
+		cfg: cfg,
+	}
+
 	hub.connectMQTT()
 
 	app := fiber.New()

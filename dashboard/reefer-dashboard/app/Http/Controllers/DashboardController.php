@@ -19,7 +19,6 @@ class DashboardController extends Controller
 
     /**
      * Meneruskan request dari Laravel ke API Go.
-     * Browser tidak berkomunikasi langsung dengan Go.
      */
     private function forward(
         string $method,
@@ -30,7 +29,7 @@ class DashboardController extends Controller
             $res = Http::baseUrl(config('services.reefer.url'))
                 ->withToken(config('services.reefer.token'))
                 ->acceptJson()
-                ->timeout(5)
+                ->timeout(10)
                 ->send(
                     $method,
                     $path,
@@ -40,7 +39,7 @@ class DashboardController extends Controller
                 );
 
             return response()->json(
-                $res->json(),
+                $res->json() ?? [],
                 $res->status()
             );
 
@@ -77,14 +76,14 @@ class DashboardController extends Controller
      */
     public function history(Request $request): JsonResponse
     {
-        $range = $request->validate([
-            'range' => 'in:1h,6h,24h',
-        ])['range'] ?? '1h';
+        $data = $request->validate([
+            'range' => 'sometimes|in:5m,15m,30m',
+        ]);
 
         return $this->forward(
             'GET',
             "/api/devices/{$this->deviceId()}/history",
-            ['range' => $range]
+            ['range' => $data['range'] ?? '5m']
         );
     }
 
@@ -102,7 +101,6 @@ class DashboardController extends Controller
 
     /**
      * Scan UID barang (endpoint lama).
-     * Dipertahankan untuk kompatibilitas.
      */
     public function scan(Request $request): JsonResponse
     {
@@ -119,7 +117,6 @@ class DashboardController extends Controller
 
     /**
      * Menyimpan data barang (endpoint lama).
-     * Dipertahankan untuk kompatibilitas.
      */
     public function saveItem(Request $request): JsonResponse
     {
@@ -167,7 +164,6 @@ class DashboardController extends Controller
 
     /**
      * Mengedit data box yang belum digunakan.
-     * Backend Go tetap memeriksa status box.
      */
     public function updateBox(Request $request, string $uid): JsonResponse
     {
@@ -193,7 +189,6 @@ class DashboardController extends Controller
 
     /**
      * Memvalidasi UID box hasil scan barcode.
-     * Data barang dan berat diambil dari database Box.
      */
     public function validateBox(string $uid): JsonResponse
     {
@@ -214,9 +209,6 @@ class DashboardController extends Controller
 
     /**
      * Membuat transaksi pengiriman baru.
-     *
-     * Nama barang dan berat tidak dikirim dari form.
-     * Keduanya otomatis diambil dari data Box oleh Go Backend.
      */
     public function createShipment(Request $request): JsonResponse
     {
@@ -267,7 +259,6 @@ class DashboardController extends Controller
 
     /**
      * Mengedit transaksi.
-     * Backend Go memastikan edit hanya boleh dilakukan satu kali.
      */
     public function updateShipment(
         Request $request,
@@ -292,9 +283,9 @@ class DashboardController extends Controller
     public function control(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'mode' => 'sometimes|in:auto,manual',
-            'fan1' => 'sometimes|in:off,normal,high',
-            'fan2' => 'sometimes|in:on,off',
+            // COOLER_ON/OFF = pendingin (kipas A dan B); TEMP_RESET = setpoint & kalibrasi ke bawaan; MUTE/UNMUTE = buzzer.
+            'command' => 'sometimes|in:COOLER_ON,COOLER_OFF,TEMP_RESET,MUTE,UNMUTE',
+            'setpoint' => 'sometimes|numeric|between:17,20',
         ]);
 
         return $this->forward(

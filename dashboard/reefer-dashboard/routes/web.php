@@ -23,11 +23,11 @@ Route::prefix('dashboard')->group(function () {
     Route::post('control', [DashboardController::class, 'control'])
         ->name('dashboard.control');
 
-    // Scan lama (tetap dipertahankan)
+    // Scan lama
     Route::post('scan', [DashboardController::class, 'scan'])
         ->name('dashboard.scan');
 
-    // Data barang lama (tetap dipertahankan)
+    // Data barang lama
     Route::post('items', [DashboardController::class, 'saveItem'])
         ->name('dashboard.items');
 
@@ -44,7 +44,6 @@ Route::prefix('dashboard')->group(function () {
         ->name('dashboard.shipments.index');
 
     // Ambil transaksi terakhir
-    // Harus berada sebelum route shipments/{id}
     Route::get('shipments/latest', [DashboardController::class, 'latestShipment'])
         ->name('dashboard.shipments.latest');
 
@@ -52,11 +51,10 @@ Route::prefix('dashboard')->group(function () {
     Route::get('shipments/{id}', [DashboardController::class, 'getShipment'])
         ->name('dashboard.shipments.show');
 
-    // Edit transaksi (maksimal satu kali, dibatasi backend Go)
+    // Edit transaksi
     Route::put('shipments/{id}', [DashboardController::class, 'updateShipment'])
         ->name('dashboard.shipments.update');
 
-    
     // Pengelolaan data box
     Route::get('boxes', [DashboardController::class, 'listBoxes'])
         ->name('dashboard.boxes.index');
@@ -66,5 +64,4 @@ Route::prefix('dashboard')->group(function () {
 
     Route::put('boxes/{uid}', [DashboardController::class, 'updateBox'])
         ->name('dashboard.boxes.update');
-
 });

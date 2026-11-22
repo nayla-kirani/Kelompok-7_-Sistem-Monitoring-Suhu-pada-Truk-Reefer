@@ -602,6 +602,9 @@
         overflow: hidden;
         min-height: 290px;
         padding: 32px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;   /* isi kartu di tengah, tidak menempel ke atas */
         color: white;
         border: 0;
         border-radius: 22px;
@@ -771,6 +774,104 @@
     }
 
     .fault { color: var(--crit-d); font-weight: 600; }
+
+    /* Indikator persen kipas penjaga suhu */
+    /* Indikator hanya-baca (tidak bisa dipencet) */
+    .seg.readonly span {
+        display: block;
+        padding: 8px 12px;
+        font: 600 12px 'Instrument Sans', sans-serif;
+        color: var(--mute);
+        cursor: default;
+        user-select: none;
+        transition: .2s ease;
+    }
+
+    .seg.readonly span + span { border-left: 1px solid var(--line); }
+    .seg.readonly span.active { background: var(--cold); color: white; }
+    .seg.readonly.is-off { opacity: .45; }
+
+    .fanpct {
+        width: 150px;
+        text-align: right;
+    }
+
+    .fanpct strong {
+        display: block;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.1;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .fanpct .bar {
+        height: 6px;
+        margin-top: 7px;
+        border-radius: 99px;
+        background: #e4ebf1;
+        overflow: hidden;
+    }
+
+    .fanpct .bar i {
+        display: block;
+        height: 100%;
+        width: 0;
+        border-radius: inherit;
+        background: var(--cold);
+        transition: width .4s ease;
+    }
+
+    .fanpct.is-off strong { color: var(--mute); }
+
+    /* Setpoint suhu */
+    .spform {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: none;
+    }
+
+    .spform .in {
+        width: 86px;
+        padding: 8px 10px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .spform .unit {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--mute);
+    }
+
+    .spform .btn { padding: 9px 14px; }
+
+    /* Penanda setpoint pada bar suhu */
+    .spmark {
+        position: absolute;
+        top: -6px;
+        left: 50%;
+        width: 2px;
+        height: 24px;
+        margin-left: -1px;
+        background: #ffd166;
+        border-radius: 1px;
+        transition: left .6s ease;
+    }
+
+    .spmark b {
+        position: absolute;
+        bottom: 26px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 11px;
+        font-weight: 700;
+        color: #ffd166;
+        white-space: nowrap;
+    }
+
+    .bands i { transition: flex-grow .4s ease; }
 
     dl {
         margin: 0 0 18px;
@@ -1304,6 +1405,13 @@
         .landing-hero { min-height: 360px; }
     }
 
+    @media (max-width: 480px) {
+        .fanpct { width: 110px; }
+        .fanpct strong { font-size: 22px; }
+        .spform { flex-wrap: wrap; justify-content: flex-end; }
+        .spform .in { width: 72px; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
         *,
         *::before,
@@ -1620,15 +1728,14 @@
 
                     <div class="strip">
                         <div class="bands">
-                            <i class="b-ok"></i>
-                            <i class="b-warn"></i>
-                            <i class="b-crit"></i>
+                            <i class="b-warn" id="bandLow"></i>
+                            <i class="b-ok" id="bandOk"></i>
+                            <i class="b-warn" id="bandWarn"></i>
+                            <i class="b-crit" id="bandCrit"></i>
                         </div>
+                        <div class="spmark" id="spMark"><b id="spMarkLabel">Setpoint</b></div>
                         <div class="marker" id="marker"></div>
-                        <div class="ticks">
-                            <span style="left:28.57%">2°C</span>
-                            <span style="left:71.43%">8°C</span>
-                        </div>
+                        <div class="ticks" id="ticks"></div>
                     </div>
 
                     <div class="sub" id="updated">Belum ada data</div>
@@ -1639,11 +1746,44 @@
                     <h2>Kipas dan kontrol</h2>
 
                     <div class="row first">
-                        <span class="sub">Mode operasi</span>
-                        <div class="seg" id="modeSeg">
-                            <button data-mode="auto">Auto</button>
-                            <button data-mode="manual">Manual</button>
+                        <div>
+                            <b>Pendingin (kipas A dan B)</b>
+                            <span class="st" id="coolerst">-</span>
                         </div>
+                        <div class="seg" id="coolerSeg">
+                            <button data-cooler="OFF">OFF</button>
+                            <button data-cooler="ON">ON</button>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div>
+                            <b>Buzzer alarm</b>
+                            <span class="st" id="buzzst">-</span>
+                        </div>
+                        <button type="button" class="btn ghost" id="muteBtn">Bisukan</button>
+                    </div>
+
+                    <div class="row">
+                        <div>
+                            <b>Setpoint suhu</b>
+                            <span class="st" id="spst">-</span>
+                        </div>
+                        <form class="spform" id="setpointForm" novalidate>
+                            <input
+                                class="in"
+                                type="number"
+                                id="setpointInput"
+                                step="0.1"
+                                min="17"
+                                max="20"
+                                inputmode="decimal"
+                                aria-label="Setpoint suhu dalam derajat Celcius"
+                            >
+                            <span class="unit">°C</span>
+                            <button type="submit" class="btn" id="setpointBtn">Atur</button>
+                            <button type="button" class="btn ghost" id="resetBtn" title="Kembalikan setpoint ke 18,5 °C dan kalibrasi sensor ke 0">Reset</button>
+                        </form>
                     </div>
 
                     <div class="row">
@@ -1651,10 +1791,9 @@
                             <b>Kipas 1, penjaga suhu</b>
                             <span class="st" id="fan1st">-</span>
                         </div>
-                        <div class="seg" data-fan="fan1">
-                            <button data-value="off">Mati</button>
-                            <button data-value="normal">Normal</button>
-                            <button data-value="high">Tinggi</button>
+                        <div class="fanpct" id="fan1box" aria-live="polite">
+                            <strong id="fan1pct">--</strong>
+                            <div class="bar"><i id="fan1bar"></i></div>
                         </div>
                     </div>
 
@@ -1663,9 +1802,9 @@
                             <b>Kipas 2, pendingin es</b>
                             <span class="st" id="fan2st">-</span>
                         </div>
-                        <div class="seg" data-fan="fan2">
-                            <button data-value="off">Mati</button>
-                            <button data-value="on">Nyala</button>
+                        <div class="seg readonly" id="fan2Seg" aria-label="Status kipas pendingin es (hanya tampilan)">
+                            <span data-value="off">Mati</span>
+                            <span data-value="on">Nyala</span>
                         </div>
                     </div>
 
@@ -1677,10 +1816,10 @@
                     <div class="row first" style="padding-bottom:6px">
                         <h2 style="margin:0">Riwayat suhu</h2>
 
-                        <div class="seg" id="rangeSeg">
-                            <button data-range="1h" class="active">1 jam</button>
-                            <button data-range="6h">6 jam</button>
-                            <button data-range="24h">24 jam</button>
+                        <div class="seg" id="rangeSeg" aria-label="Rentang waktu grafik">
+                            <button data-range="5m" class="active">5 menit</button>
+                            <button data-range="15m">15 menit</button>
+                            <button data-range="30m">30 menit</button>
                         </div>
                     </div>
 
@@ -1745,7 +1884,7 @@
                     <ul class="ev" id="eventsList"></ul>
                 </section>
 
-            </div>
+                        </div>
         </div>
     </section>
 
@@ -2014,13 +2153,12 @@
         critical: 'Kritis'
     };
 
-    const FAN1 = {
-        off: 'Mati',
-        normal: 'Menyala, kecepatan normal',
-        high: 'Menyala, kecepatan tinggi'
-    };
+    // Batas setpoint harus sama dengan SP_MIN / SP_MAX di kode Arduino.
+    const SP_MIN = 17;
+    const SP_MAX = 20;
 
-    let range = '1h';
+    let range = '5m';
+    let currentSetpoint = null;
     let scanner = null;
     let scanning = false;
     let currentShipment = null;
@@ -2069,6 +2207,20 @@
         if (seconds < 3600) return Math.floor(seconds / 60) + ' menit lalu';
 
         return Math.floor(seconds / 3600) + ' jam lalu';
+    }
+
+    function hhmmss(iso) {
+        if (!iso) return '-';
+
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return '-';
+
+        return date.toLocaleTimeString('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
     }
 
     function hhmm(iso) {
@@ -2133,20 +2285,13 @@
                     borderWidth: 2
                 },
                 {
-                    label: 'Batas warning (2°C)',
+                    label: 'Setpoint',
                     data: [],
                     borderColor: '#B97A00',
                     borderDash: [6, 4],
                     pointRadius: 0,
-                    borderWidth: 1.5
-                },
-                {
-                    label: 'Batas kritis (8°C)',
-                    data: [],
-                    borderColor: '#B3321F',
-                    borderDash: [6, 4],
-                    pointRadius: 0,
-                    borderWidth: 1.5
+                    borderWidth: 1.5,
+                    fill: false
                 }
             ]
         },
@@ -2167,7 +2312,8 @@
                 },
                 x: {
                     ticks: {
-                        maxTicksLimit: 8
+                        maxTicksLimit: 8,
+                        maxRotation: 0
                     }
                 }
             },
@@ -2187,38 +2333,33 @@
     // MONITORING SUHU DAN KIPAS
     // ==========================================
 
-    function fanLine(selector, text, fan = {}) {
-        const element = $(selector);
+    let loadingLatest = false;
+    let loadingHistory = false;
+    let sendingSetpoint = false;
+    let controlBusy = false;
+    let lastMuted = false;
 
-        element.textContent = text + (
-            fan.rpm != null ? ', ' + fan.rpm + ' RPM' : ''
-        );
-
-        if (fan.fault) {
-            const span = document.createElement('span');
-            span.className = 'fault';
-            span.textContent = ' Bermasalah, kipas tidak berputar';
-            element.append(span);
-        }
+    function fmtTemp(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n.toFixed(1) : '-';
     }
 
     function renderLatest(data) {
         $('#banner').classList.remove('show');
         $('#app').dataset.status = data.status || '';
 
-        const temperature = Number(data.temperature);
+        const sensorError = !!data.sensor_error;
+        const temperature = sensorError ? NaN : Number(data.temperature);
 
         $('#temp').textContent = Number.isFinite(temperature)
             ? temperature.toFixed(1)
             : '--';
 
-        $('#badge').textContent =
-            LBL[data.status] || data.status || '-';
+        $('#badge').textContent = sensorError
+            ? 'Sensor error'
+            : (LBL[data.status] || data.status || '-');
 
-        if (Number.isFinite(temperature)) {
-            $('#marker').style.left =
-                ((Math.min(12, Math.max(-2, temperature)) + 2) / 14 * 100) + '%';
-        }
+        renderGauge(data, temperature);
 
         $('#updated').textContent = 'Data terakhir ' + ago(data.updated_at);
 
@@ -2228,49 +2369,167 @@
             ? 'Perangkat online'
             : 'Perangkat offline, terakhir terlihat ' + ago(data.last_seen);
 
+        const online = !!data.online;
         const fan1 = data.fan1 || {};
         const fan2 = data.fan2 || {};
 
-        fanLine('#fan1st', FAN1[fan1.state] || fan1.state || '-', fan1);
+        // Pendingin (kipas A dan B): ON / OFF sesuai laporan ESP32.
+        const cooler = String(data.cooler || '').toUpperCase();
 
-        fanLine(
-            '#fan2st',
-            fan2.state === 'on' ? 'Menyala' : 'Mati',
-            fan2
-        );
-
-        document.querySelectorAll('#modeSeg button').forEach(button => {
+        document.querySelectorAll('#coolerSeg button').forEach(button => {
             button.classList.toggle(
                 'active',
-                button.dataset.mode === data.mode
+                online && button.dataset.cooler === cooler
             );
 
-            button.disabled = !data.online;
+            button.disabled = !online || controlBusy;
         });
 
-        const locked = data.mode !== 'manual' || !data.online;
+        $('#coolerst').textContent = !online
+            ? 'Tidak ada data'
+            : cooler === 'ON'
+                ? 'Aktif, kipas diatur otomatis oleh ESP32'
+                : cooler === 'OFF'
+                    ? 'Dimatikan, kedua kipas mati'
+                    : '-';
 
-        document.querySelectorAll('[data-fan]').forEach(group => {
-            const fan = data[group.dataset.fan] || {};
+        // Buzzer alarm: tombol bisukan hanya aktif saat kondisi kritis atau sensor error
+        // (ESP32 otomatis mengaktifkan suara lagi setelah kondisi itu selesai).
+        const alarm = !!data.alarm;
+        const muted = !!data.muted;
 
-            group.querySelectorAll('button').forEach(button => {
-                button.classList.toggle(
-                    'active',
-                    button.dataset.value === fan.state
-                );
+        lastMuted = muted;
 
-                button.disabled = locked;
-            });
+        $('#buzzst').textContent = !online
+            ? 'Tidak ada data'
+            : sensorError
+                ? (muted ? 'Sensor error, buzzer dibisukan' : 'Sensor error, buzzer berbunyi')
+                : alarm
+                    ? (muted ? 'Kondisi kritis, buzzer dibisukan' : 'Kondisi kritis, buzzer berbunyi')
+                    : 'Siaga, tidak ada alarm';
+
+        $('#muteBtn').textContent = muted ? 'Aktifkan suara' : 'Bisukan';
+        $('#muteBtn').disabled = !online || controlBusy || (!alarm && !muted);
+
+        // Setpoint suhu.
+        const sp = Number(data.setpoint);
+        const hasSp = data.setpoint != null && Number.isFinite(sp);
+
+        currentSetpoint = hasSp ? sp : null;
+        updateSetpointLine();
+
+        $('#spst').textContent = hasSp
+            ? 'Aktif di perangkat: ' + sp.toFixed(1) + ' °C'
+            : 'Belum ada data setpoint dari perangkat';
+
+        const spInput = $('#setpointInput');
+
+        // Jangan menimpa angka yang sedang diketik pengguna.
+        if (hasSp && document.activeElement !== spInput) {
+            spInput.value = sp.toFixed(1);
+        }
+
+        spInput.disabled = !online || sendingSetpoint;
+        $('#setpointBtn').disabled = !online || sendingSetpoint;
+        $('#resetBtn').disabled = !online || sendingSetpoint || controlBusy;
+
+        // Kipas 1, penjaga suhu: persen sama persis dengan Arduino (fan_stab).
+        const pct = Math.min(100, Math.max(0, Math.round(Number(fan1.percent))));
+        const pctOk = online && Number.isFinite(pct);
+
+        $('#fan1pct').textContent = pctOk ? pct + '%' : '--';
+        $('#fan1bar').style.width = (pctOk ? pct : 0) + '%';
+        $('#fan1box').classList.toggle('is-off', !pctOk || pct === 0);
+
+        $('#fan1st').textContent = !online
+            ? 'Tidak ada data'
+            : (pct > 0 ? 'Menyala' : 'Mati');
+
+        // Kipas 2, pendingin es: hanya indikator ON/OFF.
+        const fan2On = online && fan2.state === 'on';
+
+        $('#fan2st').textContent = !online
+            ? 'Tidak ada data'
+            : (fan2On ? 'Menyala' : 'Mati');
+
+        $('#fan2Seg').classList.toggle('is-off', !online);
+        document.querySelectorAll('#fan2Seg span').forEach(el => {
+            el.classList.toggle(
+                'active',
+                online && el.dataset.value === (fan2On ? 'on' : 'off')
+            );
         });
 
-        $('#ctlHint').textContent = !data.online
-            ? 'Perangkat offline, kontrol kipas dinonaktifkan.'
-            : data.mode === 'manual'
-                ? 'Mode manual: kamu mengatur kipas sendiri.'
-                : 'Mode auto: ESP32 mengatur kipas sesuai suhu. Pilih Manual untuk mengontrol sendiri.';
+        $('#ctlHint').textContent = !online
+            ? 'Perangkat offline, kontrol dinonaktifkan.'
+            : 'Kecepatan dan status kipas hanya dipantau di sini, ESP32 mengaturnya otomatis. Yang bisa diubah: pendingin ON/OFF dan setpoint.';
+    }
+
+    // Bar suhu: zona warna dan penanda mengikuti nilai dari ESP32.
+    function renderGauge(data, temperature) {
+        const safeMin = Number(data.safe_min);
+        const safeMax = Number(data.safe_max);
+        const warnMax = Number(data.warn_max);
+
+        const zonesOk = Number.isFinite(safeMin) && Number.isFinite(safeMax) &&
+            Number.isFinite(warnMax) && safeMin < safeMax && safeMax < warnMax;
+
+        const min = zonesOk ? safeMin : 17;
+        const max = zonesOk ? safeMax : 20;
+        const warn = zonesOk ? warnMax : 23;
+
+        // Skala bar: 3 °C di bawah batas bawah sampai 4 °C di atas batas kritis.
+        const lo = min - 3;
+        const hi = warn + 4;
+        const pos = value =>
+            (Math.min(hi, Math.max(lo, value)) - lo) / (hi - lo) * 100;
+
+        $('#bandLow').style.flexGrow = min - lo;
+        $('#bandOk').style.flexGrow = max - min;
+        $('#bandWarn').style.flexGrow = warn - max;
+        $('#bandCrit').style.flexGrow = hi - warn;
+
+        const ticks = $('#ticks');
+        ticks.replaceChildren();
+
+        [min, max, warn].forEach(value => {
+            const span = document.createElement('span');
+            span.style.left = pos(value) + '%';
+            span.textContent = value.toFixed(1).replace(/\.0$/, '') + '°C';
+            ticks.append(span);
+        });
+
+        if (Number.isFinite(temperature)) {
+            $('#marker').style.left = pos(temperature) + '%';
+        }
+
+        const sp = Number(data.setpoint);
+        const mark = $('#spMark');
+
+        if (data.setpoint != null && Number.isFinite(sp)) {
+            mark.hidden = false;
+            mark.style.left = pos(sp) + '%';
+            $('#spMarkLabel').textContent = 'Setpoint ' + sp.toFixed(1) + '°C';
+        } else {
+            mark.hidden = true;
+        }
+    }
+
+    function updateSetpointLine() {
+        const line = chart.data.datasets[1];
+        const label = currentSetpoint == null
+            ? 'Setpoint'
+            : 'Setpoint (' + currentSetpoint.toFixed(1) + '°C)';
+
+        line.label = label;
+        line.data = chart.data.labels.map(() => currentSetpoint);
+        chart.update('none');
     }
 
     async function loadLatest() {
+        if (loadingLatest) return;
+        loadingLatest = true;
+
         try {
             const data = await getJson(U.latest);
             renderLatest(data);
@@ -2280,21 +2539,27 @@
             $('#onlineText').textContent = 'Tidak terhubung';
 
             console.error('Gagal memuat data monitoring:', error);
+        } finally {
+            loadingLatest = false;
         }
     }
 
     async function loadHistory() {
+        if (loadingHistory) return;
+        loadingHistory = true;
+
         try {
-            const points = await getJson(U.history + '?range=' + range);
+            const query = new URLSearchParams({ range: range });
+            const points = await getJson(U.history + '?' + query.toString());
 
-            chart.data.labels = points.map(point => hhmm(point.t));
+            chart.data.labels = points.map(point => hhmmss(point.t));
             chart.data.datasets[0].data = points.map(point => point.temp);
-            chart.data.datasets[1].data = points.map(() => 2);
-            chart.data.datasets[2].data = points.map(() => 8);
 
-            chart.update();
+            updateSetpointLine();
         } catch (error) {
             console.error('Gagal memuat grafik:', error);
+        } finally {
+            loadingHistory = false;
         }
     }
 
@@ -2340,9 +2605,12 @@
     }
 
     async function sendControl(payload) {
-        document.querySelectorAll('.seg button').forEach(button => {
+        controlBusy = true;
+        document.querySelectorAll('#coolerSeg button').forEach(button => {
             button.disabled = true;
         });
+        $('#resetBtn').disabled = true;
+        $('#muteBtn').disabled = true;
 
         try {
             await requestJson(U.control, {
@@ -2356,6 +2624,50 @@
             toast(error.message, true);
         }
 
+        // ESP32 membalas telemetri baru segera setelah menerima perintah.
+        await new Promise(resolve => setTimeout(resolve, 600));
+
+        controlBusy = false;
+        await loadLatest();
+    }
+
+    async function saveSetpoint(event) {
+        event.preventDefault();
+
+        const input = $('#setpointInput');
+        const value = Number(input.value);
+
+        if (input.value.trim() === '' || !Number.isFinite(value)) {
+            toast('Setpoint harus berupa angka.', true);
+            return;
+        }
+
+        if (value < SP_MIN || value > SP_MAX) {
+            toast('Setpoint harus antara ' + SP_MIN + ' dan ' + SP_MAX + ' °C.', true);
+            return;
+        }
+
+        sendingSetpoint = true;
+        input.disabled = true;
+        $('#setpointBtn').disabled = true;
+
+        try {
+            await requestJson(U.control, {
+                method: 'POST',
+                headers: jsonHeaders,
+                body: JSON.stringify({ setpoint: Math.round(value * 10) / 10 })
+            });
+
+            toast('Setpoint dikirim ke perangkat');
+            input.blur();
+        } catch (error) {
+            toast(error.message, true);
+        } finally {
+            sendingSetpoint = false;
+        }
+
+        // ESP32 membalas telemetri baru segera setelah menerima perintah.
+        await new Promise(resolve => setTimeout(resolve, 600));
         await loadLatest();
     }
 
@@ -2375,17 +2687,16 @@
             return;
         }
 
-        if (button.dataset.mode) {
-            sendControl({ mode: button.dataset.mode });
-            return;
-        }
+        if (button.dataset.cooler) {
+            const on = button.dataset.cooler === 'ON';
 
-        const group = button.closest('[data-fan]');
+            if (!on && !confirm(
+                'Matikan pendingin? Kedua kipas akan mati, status menjadi Kritis, dan buzzer berbunyi.'
+            )) {
+                return;
+            }
 
-        if (group) {
-            sendControl({
-                [group.dataset.fan]: button.dataset.value
-            });
+            sendControl({ command: on ? 'COOLER_ON' : 'COOLER_OFF' });
         }
     });
 
@@ -3070,14 +3381,31 @@
     // INISIALISASI DASHBOARD
     // ==========================================
 
+    $('#setpointForm').addEventListener('submit', saveSetpoint);
+
+    $('#muteBtn').addEventListener('click', () => {
+        sendControl({ command: lastMuted ? 'UNMUTE' : 'MUTE' });
+    });
+
+    $('#resetBtn').addEventListener('click', () => {
+        if (!confirm(
+            'Reset suhu? Setpoint kembali ke 18,5 °C dan kalibrasi sensor kembali ke 0.'
+        )) {
+            return;
+        }
+
+        sendControl({ command: 'TEMP_RESET' });
+    });
+
     loadLatest();
     loadHistory();
     loadEvents();
     loadLatestShipment();
 
-    setInterval(loadLatest, 3000);
+    // ESP32 mengirim telemetri tiap 1 detik, jadi dashboard ikut menyegarkan tiap 1 detik.
+    setInterval(loadLatest, 1000);
     setInterval(loadEvents, 10000);
-    setInterval(loadHistory, 30000);
+    setInterval(loadHistory, 2000);   // grafik ikut real-time (sensor membaca tiap 2 detik)
     setInterval(loadLatestShipment, 10000);
 
 })();

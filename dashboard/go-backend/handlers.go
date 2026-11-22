@@ -23,6 +23,8 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Get("/devices/:id/latest", h.latest)
 	api.Get("/devices/:id/history", h.history)
 	api.Get("/devices/:id/events", h.events)
+
+	// Kontrol perangkat.
 	api.Post("/devices/:id/control", h.control)
 	api.Post("/devices/:id/scan", h.scan)
 
@@ -36,19 +38,11 @@ func (h *Hub) routes(app *fiber.App) {
 	api.Put("/boxes/:uid", h.updateBox)
 	api.Get("/boxes/:uid/validate", h.validateBox)
 
-	// Riwayat transaksi pengiriman
+	// Riwayat transaksi pengiriman.
 	api.Get("/shipments", h.listShipments)
-
-	// Transaksi terakhir
 	api.Get("/shipments/latest", h.getLatestShipment)
-
-	// Buat transaksi
 	api.Post("/shipments", h.createShipment)
-
-	// Detail transaksi
 	api.Get("/shipments/:id", h.getShipment)
-
-	// Edit transaksi
 	api.Put("/shipments/:id", h.updateShipment)
 }
 
@@ -85,6 +79,14 @@ type Latest struct {
 	Temperature float64   `json:"temperature"`
 	Status      string    `json:"status"`
 	Mode        string    `json:"mode"`
+	Cooler      string    `json:"cooler"`
+	SensorError bool      `json:"sensor_error"`
+	Alarm       bool      `json:"alarm"`
+	Muted       bool      `json:"muted"`
+	Setpoint    *float64  `json:"setpoint"`
+	SafeMin     float64   `json:"safe_min"`
+	SafeMax     float64   `json:"safe_max"`
+	WarnMax     float64   `json:"warn_max"`
 	Fan1        FanOut    `json:"fan1"`
 	Fan2        FanOut    `json:"fan2"`
 	Online      bool      `json:"online"`
@@ -117,8 +119,15 @@ func (h *Hub) latest(c fiber.Ctx) error {
 		Temperature: st.Temperature,
 		Status:      st.Status,
 		Mode:        st.Mode,
+		Cooler:      st.Cooler,
+		SensorError: st.SensorError,
+		Alarm:       st.Alarm,
+		Muted:       st.Muted,
+		Setpoint:    st.Setpoint,
+		SafeMin:     st.SafeMin,
+		SafeMax:     st.SafeMax,
+		WarnMax:     st.WarnMax,
 
-		// Fan 1 = Fan A (pendingin).
 		Fan1: FanOut{
 			State:   st.Fan1State,
 			RPM:     st.Fan1RPM,
@@ -126,7 +135,6 @@ func (h *Hub) latest(c fiber.Ctx) error {
 			Percent: st.Fan1Percent,
 		},
 
-		// Fan 2 = Fan B (penjaga suhu).
 		Fan2: FanOut{
 			State:   st.Fan2State,
 			RPM:     st.Fan2RPM,
@@ -140,6 +148,10 @@ func (h *Hub) latest(c fiber.Ctx) error {
 	})
 }
 
+// ============================================================
+// RIWAYAT SUHU DAN INTERVAL GRAFIK
+// ============================================================
+
 type Point struct {
 	T    time.Time `json:"t"`
 	Temp float64   `json:"temp"`
@@ -148,52 +160,76 @@ type Point struct {
 func (h *Hub) history(c fiber.Ctx) error {
 	id := c.Params("id")
 
-	dur, bucket := time.Hour, int64(10)
+	// Grafik real-time: jendela waktu dalam menit. Data dirata-rata per beberapa detik
+	// supaya grafik tetap halus (sensor DHT22 membaca tiap 2 detik).
+	var duration time.Duration
+	var bucket int64
 
-	switch c.Query("range", "1h") {
-	case "6h":
-		dur, bucket = 6*time.Hour, 60
-	case "24h":
-		dur, bucket = 24*time.Hour, 300
+	switch c.Query("range", "5m") {
+	case "5m":
+		duration = 5 * time.Minute
+		bucket = 2
+	case "15m":
+		duration = 15 * time.Minute
+		bucket = 5
+	case "30m":
+		duration = 30 * time.Minute
+		bucket = 10
+	default:
+		return fail(c, fiber.StatusBadRequest, "range harus 5m, 15m, atau 30m")
 	}
 
 	var rows []Reading
 
-	h.db.Select("created_at", "temperature").
-		Where("device_id = ? AND created_at >= ?", id, time.Now().UTC().Add(-dur)).
+	start := time.Now().UTC().Add(-duration)
+
+	if err := h.db.
+		Select("created_at", "temperature").
+		Where("device_id = ? AND created_at >= ?", id, start).
 		Order("created_at asc").
-		Find(&rows)
+		Find(&rows).Error; err != nil {
+		return fail(c, fiber.StatusInternalServerError, "gagal mengambil riwayat suhu")
+	}
 
 	out := []Point{}
+
 	var sum float64
-	var n int
+	var count int
 	var key int64 = -1
 
 	flush := func() {
-		if n > 0 {
-			out = append(out, Point{
-				T:    time.Unix(key*bucket, 0).UTC(),
-				Temp: math.Round(sum/float64(n)*100) / 100,
-			})
+		if count == 0 {
+			return
 		}
+
+		out = append(out, Point{
+			T:    time.Unix(key*bucket, 0).UTC(),
+			Temp: math.Round(sum/float64(count)*100) / 100,
+		})
 	}
 
 	for _, r := range rows {
-		k := r.CreatedAt.Unix() / bucket
+		currentKey := r.CreatedAt.Unix() / bucket
 
-		if k != key {
+		if currentKey != key {
 			flush()
-			key, sum, n = k, 0, 0
+			key = currentKey
+			sum = 0
+			count = 0
 		}
 
 		sum += r.Temperature
-		n++
+		count++
 	}
 
 	flush()
 
 	return c.JSON(out)
 }
+
+// ============================================================
+// EVENT
+// ============================================================
 
 type EventOut struct {
 	Time    time.Time `json:"time"`
@@ -210,10 +246,12 @@ func (h *Hub) events(c fiber.Ctx) error {
 
 	var rows []Event
 
-	h.db.Where("device_id = ?", c.Params("id")).
+	if err := h.db.Where("device_id = ?", c.Params("id")).
 		Order("created_at desc").
 		Limit(limit).
-		Find(&rows)
+		Find(&rows).Error; err != nil {
+		return fail(c, fiber.StatusInternalServerError, "gagal mengambil event")
+	}
 
 	out := make([]EventOut, 0, len(rows))
 
@@ -233,11 +271,18 @@ func (h *Hub) events(c fiber.Ctx) error {
 // ============================================================
 
 type ControlReq struct {
-	Mode    *string `json:"mode,omitempty"`
-	Fan1    *string `json:"fan1,omitempty"`
-	Fan2    *string `json:"fan2,omitempty"`
+	// Perintah teks untuk ESP32: COOLER_ON, COOLER_OFF, TEMP_RESET, dan lainnya.
 	Command *string `json:"command,omitempty"`
+
+	// Setpoint suhu dalam °C, dikirim ke ESP32 sebagai TEMP_SET:<nilai>.
+	Setpoint *float64 `json:"setpoint,omitempty"`
 }
+
+// Rentang setpoint harus sama dengan SP_MIN dan SP_MAX di firmware ESP32.
+const (
+	setpointMin = 17.0
+	setpointMax = 20.0
+)
 
 func in(v string, allowed ...string) bool {
 	for _, a := range allowed {
@@ -249,19 +294,22 @@ func in(v string, allowed ...string) bool {
 	return false
 }
 
+// Keterangan yang dicatat di event untuk tiap perintah dari dashboard.
+var commandLabel = map[string]string{
+	"COOLER_ON":  "pendingin (kipas A dan B) dinyalakan",
+	"COOLER_OFF": "pendingin (kipas A dan B) dimatikan",
+	"TEMP_RESET": "setpoint direset ke bawaan dan kalibrasi sensor ke 0",
+	"MUTE":       "buzzer dibisukan",
+	"UNMUTE":     "buzzer diaktifkan kembali",
+}
+
 func translateCommand(req ControlReq) (string, string, error) {
 	count := 0
 
-	if req.Mode != nil {
-		count++
-	}
-	if req.Fan1 != nil {
-		count++
-	}
-	if req.Fan2 != nil {
-		count++
-	}
 	if req.Command != nil {
+		count++
+	}
+	if req.Setpoint != nil {
 		count++
 	}
 
@@ -269,61 +317,28 @@ func translateCommand(req ControlReq) (string, string, error) {
 		return "", "", fmt.Errorf("kirim satu perintah dalam satu waktu")
 	}
 
-	if req.Command != nil {
-		command := strings.ToUpper(strings.TrimSpace(*req.Command))
+	if req.Setpoint != nil {
+		v := math.Round(*req.Setpoint*10) / 10
 
-		allowed := []string{
-			"COOLER_ON",
-			"COOLER_OFF",
-			"MUTE",
-			"UNMUTE",
-			"TEMP_UP",
-			"TEMP_DOWN",
-			"TEMP_RESET",
-			"PID_ON",
-			"PID_OFF",
-		}
-
-		if !in(command, allowed...) {
-			return "", "", fmt.Errorf("perintah ESP32 tidak dikenali")
-		}
-
-		return command, command, nil
-	}
-
-	if req.Mode != nil {
-		return "", "", fmt.Errorf(
-			"firmware ESP32 belum mendukung pengaturan mode auto/manual",
-		)
-	}
-
-	if req.Fan1 != nil {
-		switch *req.Fan1 {
-		case "normal":
-			return "COOLER_ON", "kipas pendingin menyala", nil
-		case "off":
-			return "COOLER_OFF", "kipas pendingin mati", nil
-		case "high":
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < setpointMin || v > setpointMax {
 			return "", "", fmt.Errorf(
-				"pengaturan kecepatan tinggi belum didukung firmware ESP32",
+				"setpoint harus antara %.1f dan %.1f°C",
+				setpointMin, setpointMax,
 			)
-		default:
-			return "", "", fmt.Errorf("nilai kipas 1 tidak valid")
 		}
+
+		return fmt.Sprintf("TEMP_SET:%.1f", v),
+			fmt.Sprintf("setpoint suhu diatur ke %.1f°C", v), nil
 	}
 
-	if req.Fan2 != nil {
-		switch *req.Fan2 {
-		case "on":
-			return "PID_ON", "PID aktif", nil
-		case "off":
-			return "PID_OFF", "PID nonaktif", nil
-		default:
-			return "", "", fmt.Errorf("nilai kipas 2 tidak valid")
-		}
+	command := strings.ToUpper(strings.TrimSpace(*req.Command))
+
+	label, ok := commandLabel[command]
+	if !ok {
+		return "", "", fmt.Errorf("perintah ESP32 tidak dikenali")
 	}
 
-	return "", "", fmt.Errorf("perintah tidak valid")
+	return command, label, nil
 }
 
 func (h *Hub) control(c fiber.Ctx) error {
@@ -460,7 +475,6 @@ type BoxInput struct {
 	WeightKg float64 `json:"weight_kg"`
 }
 
-// GET /api/boxes
 func (h *Hub) listBoxes(c fiber.Ctx) error {
 	var boxes []Box
 
@@ -471,7 +485,6 @@ func (h *Hub) listBoxes(c fiber.Ctx) error {
 	return c.JSON(boxes)
 }
 
-// POST /api/boxes/bulk
 func (h *Hub) createBoxesBulk(c fiber.Ctx) error {
 	var req CreateBoxesBulkReq
 
@@ -543,7 +556,6 @@ func (h *Hub) createBoxesBulk(c fiber.Ctx) error {
 	})
 }
 
-// PUT /api/boxes/:uid
 func (h *Hub) updateBox(c fiber.Ctx) error {
 	uid := strings.TrimSpace(c.Params("uid"))
 
@@ -600,7 +612,6 @@ func (h *Hub) updateBox(c fiber.Ctx) error {
 	})
 }
 
-// GET /api/boxes/:uid/validate
 func (h *Hub) validateBox(c fiber.Ctx) error {
 	uid := strings.TrimSpace(c.Params("uid"))
 
@@ -622,9 +633,7 @@ func (h *Hub) validateBox(c fiber.Ctx) error {
 
 	itemName := strings.TrimSpace(box.ItemName)
 
-	// Pastikan data barang dan berat tersedia.
-	if itemName == "" || box.WeightKg == nil ||
-		*box.WeightKg <= 0 {
+	if itemName == "" || box.WeightKg == nil || *box.WeightKg <= 0 {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
 			"valid":     false,
 			"reusable":  false,
@@ -636,9 +645,6 @@ func (h *Hub) validateBox(c fiber.Ctx) error {
 		})
 	}
 
-	// Box available boleh digunakan.
-	// Box used tetap bisa menampilkan detail barang,
-	// tetapi tidak boleh digunakan untuk transaksi baru.
 	reusable := box.Status == "available"
 
 	message := "UID box valid dan dapat digunakan"

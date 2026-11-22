@@ -53,14 +53,11 @@ func loadConfig() Config {
 		MQTTPass:     env("MQTT_PASS", ""),
 		MQTTClientID: env("MQTT_CLIENT_ID", "reefer-backend"),
 
-		// Mengikuti topic yang digunakan ESP32
 		MQTTDataTopic:    env("MQTT_DATA_TOPIC", "unsoed/project/coolerbox/data"),
 		MQTTCommandTopic: env("MQTT_COMMAND_TOPIC", "unsoed/project/coolerbox/perintah"),
 
-		// ID perangkat yang digunakan oleh dashboard
 		DeviceID: env("DEVICE_ID", "reefer-01"),
 
-		// Menyesuaikan batas suhu ESP32
 		WarnAt:     envFloat("TEMP_WARN", 19.5),
 		CritAt:     envFloat("TEMP_CRIT", 20.0),
 		Hysteresis: envFloat("TEMP_HYSTERESIS", 0.2),

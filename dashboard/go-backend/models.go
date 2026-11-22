@@ -2,7 +2,7 @@ package main
 
 import "time"
 
-// DeviceState menyimpan kondisi terakhir tiap perangkat (satu baris per perangkat).
+// DeviceState menyimpan kondisi terakhir tiap perangkat.
 type DeviceState struct {
 	DeviceID    string `gorm:"primaryKey;size:64"`
 	BoxID       string `gorm:"size:64"`
@@ -10,6 +10,22 @@ type DeviceState struct {
 	Temperature float64
 	Status      string `gorm:"size:16"`
 	Mode        string `gorm:"size:16"`
+
+	// Status sistem pendingin dari ESP32 ("ON"/"OFF") dan setpoint suhu (°C).
+	Cooler   string   `gorm:"size:8"`
+
+	// Kondisi alarm dari ESP32: sensor error, alarm aktif, dan buzzer dibisukan.
+	SensorError bool `gorm:"not null;default:false"`
+	Alarm       bool `gorm:"not null;default:false"`
+	Muted       bool `gorm:"not null;default:false"`
+
+	Setpoint *float64
+
+	// Ambang batas suhu monitoring.
+	SafeMin float64 `gorm:"not null;default:17" json:"safe_min"`
+	SafeMax float64 `gorm:"not null;default:19.5" json:"safe_max"`
+	WarnMax float64 `gorm:"not null;default:20" json:"warn_max"`
+
 	Fan1State   string `gorm:"size:16"`
 	Fan1RPM     *int
 	Fan1Fault   bool
@@ -19,9 +35,10 @@ type DeviceState struct {
 	Fan2RPM     *int
 	Fan2Fault   bool
 	Fan2Percent int `gorm:"not null;default:0"`
-	Online      bool
-	LastSeen    time.Time
-	UpdatedAt   time.Time
+
+	Online    bool
+	LastSeen  time.Time
+	UpdatedAt time.Time
 }
 
 // Reading adalah riwayat suhu untuk grafik.
@@ -33,7 +50,7 @@ type Reading struct {
 	CreatedAt   time.Time `gorm:"index:idx_dev_time,priority:2"`
 }
 
-// Event mencatat perubahan kondisi, kipas, mode, dan status perangkat.
+// Event mencatat perubahan kondisi perangkat.
 type Event struct {
 	ID        uint      `gorm:"primaryKey"`
 	DeviceID  string    `gorm:"size:64;index:idx_event_dev_time,priority:1"`
